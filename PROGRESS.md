@@ -4,79 +4,72 @@ Updated: October 15, 2026
 
 ## Done
 
-- Task 1: audited official Qloo and hackathon documentation; created probes and recorded verified/unverified capabilities.
-- Task 2: added the typed backend foundation, Qloo and LLM clients, FastAPI health/configuration, and isolated tests.
-- Task 3, stages A–D: added validated discovery request/result contracts, optional business-industry input, exact-match OSM business resolution with user selection for ambiguity, Qloo seed resolution, LangGraph stages for cross-category discovery and verification, and a same-evidence comparison with a conventional baseline only when independently verified evidence exactly matches the user's stated industry.
-- Added the FastAPI `POST /discover` endpoint.
-- Qloo discovery is limited to the live-checked brand-to-place Insights request. It excludes the seed, non-positive affinity, and results with no numeric affinity; it does not invent a cutoff, compare scores across queries, use location/tag Insights filters, or fabricate candidates.
-- Added Nominatim verification with fixed official host, bounded search results, an identifying User-Agent, 1 request/second pacing in one backend process, exact-name/locality matching, and explicit limits on what an OSM record verifies.
-- Added one structured LLM interpretation call for verified candidates. Its claims are labeled `ai_interpretation`, cite only supplied Qloo/OSM evidence references, and do not prove feasibility or commercial fit. LLM requests are serialized and spaced; a `Retry-After` longer than the bounded wait leads to provider fallback rather than an early retry.
-- Added synthetic test-only discovery fixtures and tests for identity ambiguity/selection, filtering, competition, baseline choice, provenance, different briefs, partial dependency failure, empty Qloo results, and LLM retry-after behavior.
-- Updated [docs/architecture.md](docs/architecture.md), [docs/qloo-capabilities.md](docs/qloo-capabilities.md), `.env.example`, and this progress record.
-- Completed two live `POST /discover` endpoint runs after Task 3. The first stopped honestly at Qloo seed identity; the second resolved a Nike seed but could not verify any of the returned high-affinity place entities in Portland, so it returned a partial result without recommendations or a baseline.
-- Fixed one issue found during the live run: non-exact Qloo Search results were previously exposed as selectable business identities. The pipeline now only surfaces exact normalized name matches; a result such as Qloo's `AOMG` response for a `The Ordinary` query is rejected as an identity. Added a regression test.
+- Task 1: audited the official Qloo and hackathon documentation; checked environment configuration; added Qloo/LLM probes and recorded live verified/unverified capabilities.
+- Task 2: added Pydantic schemas, Qloo and OpenAI-compatible LLM clients, FastAPI health/configuration, safe structured logging, CORS/request limits, and isolated client tests.
+- Task 3, stages A–D: added validated business briefs, explicit OSM/Qloo identity choices, LangGraph discovery, Qloo brand-to-place Insights, Nominatim verification, evidence-bounded interpretation, and a same-response conventional-baseline comparison.
+- Qloo requests use the observed/documented `GET /search` and `GET /v2/insights` contracts. Search receives the business name only plus `types=urn:entity:brand`; it does not append city text. Insights uses the checked `filter.type=urn:entity:place` and `signal.interests.entities` parameters, with no location/tag filters.
+- Qloo Search exact names are preferred. If none are returned, up to five results whose response `types` include the requested brand type are offered with `identity_match_label="not an exact match"` and the pipeline waits for an explicit Qloo entity selection. Results explicitly typed as a different entity kind are excluded. Brand type does not establish that a near-match is the intended business; explicit selection marks the identity only partially verified.
+- Stage C retains candidates without an exact local OSM result as `unverified: no matching OSM listing found`, preserves their Qloo evidence, and records missing evidence. Ambiguous or unavailable checks also remain visible.
+- Stage D passes all candidate checks through evidence-bounded interpretation/comparison. With an industry supplied, unverified candidates remain visible as unexpected results and can never become the conventional baseline. A missing baseline is explicit; verified exact OSM category/type matching remains the baseline rule.
+- Added isolated synthetic tests for explicit near-match selection, entity-type filtering, Search query parameters without city augmentation, retained unverified candidates, baseline limitation, and Qloo Search type parsing. Fixtures are not live evidence.
+- Updated [docs/architecture.md](docs/architecture.md) to match the current selection, verification, and comparison behavior.
+- No `.env` values were printed. All seven required `.env` keys were present at run time.
 
-## Live run outcomes
+## Live results — current `/discover` reruns
 
-### The Ordinary — selected Prince Street, New York
+### Qloo Search discrepancy: The Ordinary
 
-- `POST /discover` returned HTTP 200 with `status=partial`; Nominatim verified the explicitly selected OSM record `node/5709446984`, 26 Prince Street, New York.
-- Qloo Search returned HTTP 200 with one result, `AOMG` (`E64B297C-3BFC-4247-B0BB-504A3548D50A`), which did not exactly match `The Ordinary`. Name variants also returned unrelated beauty brands or the same unrelated result. The pipeline did not present these as selectable identities and did not run Insights, candidate verification, LLM interpretation, or baseline comparison.
-- Qloo entity identity, candidates, and a defensible baseline are therefore **unverified/unavailable** for this brief; the partial response explains the unresolved seed.
+- Task 2 probe request: `GET https://hackathon.api.qloo.com/search?query=The+Ordinary&types=urn%3Aentity%3Abrand`.
+- Pipeline request after selecting `node/5709446984` (26 Prince Street): the same `GET /search` with `query=The Ordinary` and `types=urn:entity:brand`. No city or market is appended.
+- Replaying that exact request now returned HTTP 200 with `AOMG`, entity ID `E64B297C-3BFC-4247-B0BB-504A3548D50A`, types `["urn:entity:brand"]`. The current Task 2 probe and pipeline request parameters match. The prior Task 2 result is recorded as resolving the correct entity, but its raw response body was not retained; the historical result cannot be compared byte-for-byte. The observed difference is in Qloo's returned catalog result, not request construction.
+- Current `POST /discover` returned HTTP 200, `status=needs_user_choice`: the Prince Street OSM record was selected/verified, and AOMG was returned only as an explicitly labeled `not an exact match` Qloo option. Its returned type is a brand, so the type filter alone cannot exclude it; the pipeline did not claim it was The Ordinary and did not run Insights or produce candidates/comparisons. An explicit Qloo entity choice is still required.
 
-### Nike — clothes industry, Portland, Oregon
+### Nike — clothes, Portland, Oregon
 
-- `POST /discover` returned HTTP 200 with `status=partial`; Nominatim returned the exact-name Nike record `node/6508564691` at 638 Southwest 5th Avenue, Portland.
-- Qloo Search returned HTTP 200 and resolved the exact-name `Nike` brand. Brand-to-place Insights returned HTTP 200 with candidates. The five highest positive numeric-affinity results checked were `ZT The Golden Hotel Barcelona` (0.9423525470), `Mercedes Heritage Apartments Barcelona` (0.9389725441), `Meliá Paris La Défense` (0.9387765011), `Seven Hotel` (0.9362683101), and `Hotel SB Glow` (0.9350479947). Each carried Qloo evidence tied to the live Insights request.
-- Nominatim returned HTTP 200 for each candidate lookup, but none had an exact-name listing in Portland. The five candidates are marked `not_found`; this only means no exact local OSM listing was returned for that request, not that the entity does not exist.
-- No candidates passed independent local verification, so LLM interpretation and comparison were not run. The unexpected candidate list is empty, the conventional baseline is `null`, and the response explicitly states why no comparison is defensible. The Qloo affinity values are relative to this one query and are not a customer-overlap measure.
+- `POST /discover` returned HTTP 200, `status=partial`. Selected OSM seed: Nike, `node/6508564691`, 638 Southwest 5th Avenue, Portland. Qloo Search resolved Nike, entity ID `C70CE2B8-0AD1-4150-BF18-5A6347F2E860`.
+- Live Insights returned these five positive-affinity place entities; each retained its Qloo evidence reference `/v2/insights?filter.type=urn:entity:place&signal.interests.entities=C70CE2B8-0AD1-4150-BF18-5A6347F2E860`:
+  - `ZT The Golden Hotel Barcelona` — `0.9423525470173761` — unverified, no matching Portland OSM listing.
+  - `Mercedes Heritage Apartments Barcelona` — `0.9389725440634531` — unverified, no matching Portland OSM listing.
+  - `Meliá Paris La Défense` — `0.9387765010871101` — unverified, no matching Portland OSM listing.
+  - `Seven Hotel` — `0.9362683100709767` — unverified, no matching Portland OSM listing.
+  - `Hotel SB Glow` — `0.9350479947320841` — unverified, no matching Portland OSM listing.
+- All five candidates flowed into comparisons with verification uncertainty; no conventional baseline was available because no candidate had a verified OSM category/type matching `clothes`. Affinity is a Qloo relative signal for this query, not customer overlap.
 
-No `.env` values were printed.
+### Nike — clothes, Barcelona, Spain
 
-## Live verification
+- An initial `POST /discover` returned HTTP 200, `status=needs_user_choice`, with two exact-name OSM Nike locations. For this additional example, the explicit location selection was `node/704065010`, Passeig de Gràcia 17, Barcelona.
+- The selected run returned HTTP 200, `status=partial`, and resolved Nike to the same Qloo seed ID above. Insights returned the same five Qloo entities and query-relative affinities.
+- `ZT The Golden Hotel Barcelona`, `Mercedes Heritage Apartments Barcelona`, `Meliá Paris La Défense`, and `Seven Hotel` remained `unverified: no matching OSM listing found` in the requested market.
+- `Hotel SB Glow` had an exact-name OSM listing: `way/430222965`, Carrer de Badajoz, Barcelona, category `tourism`, type `hotel`. It is shown as a candidate with Qloo evidence and the independent OSM listing, not as proof that the two sources refer to the same entity or that the hotel is operating/available.
+- All five candidates flowed into comparison. No conventional baseline was selected because no verified candidate's OSM category/type exactly matched the stated `clothes` industry. The response remained partial because four checks were unverified and operational/logistical evidence is missing.
 
-### Qloo checks (October 15, 2026)
+Full captured JSON for all four endpoint responses (The Ordinary, Nike/Portland, Nike/Barcelona before location choice, and Nike/Barcelona after the explicit choice), plus the sanitized current Qloo Search replay, is retained in the current session artifact `live-discover-results.json`. It contains no credentials.
 
-- `Nike`, Search type `urn:entity:brand`: HTTP 200, 5 results; top exact-name result `Nike`.
-- `LEGO`, Search type `urn:entity:brand`: HTTP 200, 2 results; top result was `The Lego Group`, not an exact-name match, so selection/confirmation is required.
-- `Tattly`, Search type `urn:entity:brand`: HTTP 200, empty results. This is a query-specific catalog gap, not proof the independent brand does not exist.
-- Nike-to-place and The-Lego-Group-to-place Insights: HTTP 200, 20 place entities each.
-- No Insights location or tag filter is planned or relied on; local-market checks use Nominatim.
+## Validation
 
-### Nominatim and real brief
-
-- Live Nominatim search for `The Ordinary, New York, NY`: HTTP 200, 2 exact-name listings in New York (Prince Street and West Broadway).
-- The initial unselected `POST /discover` request returned `status=needs_user_choice`, `osm_status=ambiguous`, and both listing options. After selecting Prince Street, the final endpoint run continued to Qloo Search and stopped because no exact Qloo brand identity was returned.
-
-## Validation (October 15, 2026)
-
-- `python -m pytest tests -q` — **36 passed**.
+- `python -m pytest tests -q` — **38 passed**.
 - `python -m ruff check backend\app backend\scripts tests` — **All checks passed**.
 - `python -m ruff format --check backend\app backend\scripts tests` — **21 files already formatted**.
 - `python -m mypy --config-file backend\pyproject.toml backend tests` — **Success: no issues found in 22 source files**.
-- Tests use synthetic fixtures and are not live-integration proof.
+- Tests use synthetic fixtures and are not proof of live integration.
 
 ## Verified vs. unverified capabilities
 
 ### Verified with real calls
 
-- Qloo authentication and Search/Insights for the tested brands and categories above, including the live Nike response used in the second `/discover` run.
-- Qloo returns an empty Search result for the tested Tattly query without an HTTP error.
-- Nominatim returns exact-name local OSM listings for the tested The Ordinary / New York and Nike / Portland queries.
-- `/discover` safely stops on the non-exact Qloo `AOMG` result for The Ordinary; exact-name-only seed resolution is now regression-tested.
-- `/discover` resolved Nike and called brand-to-place Insights, then returned partial with five Qloo results failing exact local OSM verification and no unsupported candidate/baseline claims.
-- Earlier Task 2 LLM check: primary received HTTP 429 twice; configured fallback returned HTTP 200 and schema-valid JSON.
+- Qloo authentication, Search for Nike and The Ordinary, and the checked brand-to-place Insights route.
+- Qloo Search can return a brand-typed non-exact result (`AOMG`) for a The Ordinary query; current exact request construction is covered by a pipeline regression test.
+- Nominatim returned exact local records for The Ordinary / New York, Nike / Portland, and Hotel SB Glow / Barcelona.
+- `/discover` now returns the required near-match choice state and retains unverified candidates in candidate checks and comparisons. The live Nike/Barcelona case included one exact-name local OSM match.
 
 ### Still unverified
 
-- A successful full live B–D result with at least one independently identity- and location-verified Qloo candidate.
-- Whether matching Qloo and OSM names refer to the same legal business/entity; the sources expose no shared identifier.
-- Nominatim coverage outside this one New York query, current business operation, ownership, event availability, prices, contacts, or willingness to collaborate.
-- Qloo catalog coverage outside the tested brand queries and brand-to-place Insights requests; Insights location/tag filters are intentionally unused.
-- Qloo affinity score scale and cross-query comparability.
-- Successful primary LLM structured output; previous live primary requests were rate limited.
+- The Qloo identity represented by `AOMG` is not verified as The Ordinary. The Ordinary discovery cannot continue until a user explicitly selects one of the offered Qloo results; this option remains a non-exact brand match.
+- Cross-source Qloo/OSM identity linkage, current operations, ownership, event availability, price, contacts, willingness to collaborate, and commercial outcomes.
+- Qloo affinity scale and cross-query comparability; affinity is not a shared-customer metric.
+- OSM coverage beyond the tested places; a missing listing is not proof the business does not exist.
+- Successful primary LLM structured output; previous Task 2 live checks observed primary rate limits and successful fallback.
 
 ## Next
 
-- The Ordinary remains blocked by Qloo returning no exact-name seed match; do not substitute a related entity without independent identity evidence.
-- Do not start Task 4 until requested.
+- Finish the current live-result review; do not start Task 4 until requested.

@@ -24,7 +24,9 @@ class DiscoveryRequest(StrictModel):
 
 
 class BusinessIdentity(StrictModel):
-    status: Literal["verified", "needs_user_choice", "not_found", "unavailable"]
+    status: Literal[
+        "verified", "partially_verified", "needs_user_choice", "not_found", "unavailable"
+    ]
     osm_status: Literal["verified", "ambiguous", "not_found", "selection_invalid", "unavailable"]
     qloo_status: Literal[
         "resolved",
@@ -45,7 +47,8 @@ class BusinessIdentity(StrictModel):
 
 class CandidateCheck(StrictModel):
     candidate: Candidate
-    status: Literal["verified", "ambiguous", "not_found", "unavailable"]
+    status: Literal["verified", "ambiguous", "not_found", "unverified", "unavailable"]
+    verification_message: str | None = Field(default=None, max_length=500)
     place_matches: list[OSMPlace] = Field(default_factory=list, max_length=5)
     verified_identity: bool = False
     verified_location: bool = False
@@ -85,6 +88,7 @@ class DiscoveryResult(StrictModel):
     candidate_checks: list[CandidateCheck] = Field(default_factory=list, max_length=5)
     unexpected_candidates: list[CandidateComparison] = Field(default_factory=list, max_length=5)
     conventional_baseline: CandidateComparison | None = None
+    baseline_limitation: str | None = Field(default=None, max_length=1_000)
     other_conventional_candidates: list[CandidateComparison] = Field(
         default_factory=list, max_length=5
     )

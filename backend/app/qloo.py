@@ -99,6 +99,11 @@ class QlooClient:
                 raise self._malformed_response()
             if not isinstance(name, str) or not name.strip():
                 raise self._malformed_response()
+            entity_types = item.get("types", [])
+            if not isinstance(entity_types, list) or any(
+                not isinstance(value, str) or not value.strip() for value in entity_types
+            ):
+                raise self._malformed_response()
             properties = item.get("properties", {})
             if not isinstance(properties, dict):
                 raise self._malformed_response()
@@ -111,6 +116,7 @@ class QlooClient:
                         entity_id=entity_id,
                         name=name,
                         entity_type=entity_type,
+                        entity_types=entity_types,
                         description=description,
                     )
                 )

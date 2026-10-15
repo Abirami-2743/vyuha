@@ -82,6 +82,7 @@ class ResolvedEntity(StrictModel):
     entity_id: str = Field(min_length=1, max_length=256)
     name: str = Field(min_length=1, max_length=500)
     entity_type: str = Field(min_length=1, max_length=120)
+    entity_types: list[str] = Field(default_factory=list, max_length=20)
     subtype: str | None = Field(default=None, max_length=120)
     description: str | None = Field(default=None, max_length=4_000)
 
@@ -104,7 +105,9 @@ class Candidate(StrictModel):
     entity_id: str = Field(min_length=1, max_length=256)
     name: str = Field(min_length=1, max_length=500)
     entity_type: str = Field(min_length=1, max_length=120)
+    entity_types: list[str] = Field(default_factory=list, max_length=20)
     subtype: str | None = Field(default=None, max_length=120)
+    identity_match_label: Literal["not an exact match"] | None = None
     affinity_score: float | None = Field(default=None, allow_inf_nan=False)
     evidence: list[EvidenceItem] = Field(default_factory=list, max_length=50)
 

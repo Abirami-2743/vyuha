@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import Any, TypeVar
 
 import httpx
@@ -109,9 +109,20 @@ async def run_pipeline(
     request_body: dict[str, Any],
     *,
     nominatim_override: Any = None,
+    qloo_search_override: Mapping[str, object] | None = None,
 ) -> Any:
     settings = make_settings()
-    qloo = QlooClient(settings, transport=httpx.MockTransport(synthetic_response))
+
+    def qloo_response(request: httpx.Request) -> httpx.Response:
+        if (
+            qloo_search_override is not None
+            and request.url.host == "hackathon.api.qloo.com"
+            and request.url.path == "/search"
+        ):
+            return httpx.Response(200, json=qloo_search_override)
+        return synthetic_response(request)
+
+    qloo = QlooClient(settings, transport=httpx.MockTransport(qloo_response))
     verifier = NominatimClient(
         transport=nominatim_override or httpx.MockTransport(synthetic_response),
         sleep=no_sleep,
@@ -206,26 +217,37 @@ def test_explicit_osm_choice_resolves_business_identity_and_continues() -> None:
     assert result.candidate_checks
 
 
-def test_non_exact_qloo_search_result_is_not_offered_as_business_identity() -> None:
+def test_non_exact_qloo_matches_require_choice_and_filter_excluded_types() -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         if request.url.host == "nominatim.openstreetmap.org":
             return httpx.Response(
                 200, json=nominatim_payload("Fixture Skin", 10, "business")
             )
-        if (
-            request.url.host == "hackathon.api.qloo.com"
-            and request.url.path == "/search"
-        ):
+        if request.url.path == "/search":
+            assert request.url.params["query"] == "Fixture Skin"
+            assert request.url.params["types"] == "urn:entity:brand"
             return httpx.Response(
                 200,
                 json={
                     "results": [
                         {
-                            "entity_id": "fixture-unrelated-id",
-                            "name": "Unrelated Brand",
+                            "entity_id": "fixture-near-brand-id",
+                            "name": "Fixture Skin Studio",
                             "types": ["urn:entity:brand"],
                             "properties": {},
-                        }
+                        },
+                        {
+                            "entity_id": "fixture-other-brand-id",
+                            "name": "Fixture Skincare",
+                            "types": ["urn:entity:brand"],
+                            "properties": {},
+                        },
+                        {
+                            "entity_id": "fixture-unrelated-type-id",
+                            "name": "Fixture Skin Place",
+                            "types": ["urn:entity:place"],
+                            "properties": {},
+                        },
                     ]
                 },
             )
@@ -254,11 +276,87 @@ def test_non_exact_qloo_search_result_is_not_offered_as_business_identity() -> N
             await llm.aclose()
 
     result = run(exercise())
-    assert result.status == "partial"
-    assert result.business_identity.qloo_status == "not_found"
-    assert result.business_identity.qloo_options == []
+    assert result.status == "needs_user_choice"
+    assert result.business_identity.qloo_status == "ambiguous"
+    assert [item.entity_id for item in result.business_identity.qloo_options] == [
+        "fixture-near-brand-id",
+        "fixture-other-brand-id",
+    ]
+    assert all(
+        item.identity_match_label == "not an exact match"
+        for item in result.business_identity.qloo_options
+    )
     assert result.candidate_checks == []
-    assert "none matched 'Fixture Skin' exactly" in result.limitations[0]
+
+
+def test_explicit_near_match_selection_continues_with_identity_caveat() -> None:
+    search_payload = {
+        "results": [
+            {
+                "entity_id": "fixture-near-brand-id",
+                "name": "Fixture Skin Studio",
+                "types": ["urn:entity:brand"],
+                "properties": {},
+            }
+        ]
+    }
+    result = run(
+        run_pipeline(
+            {
+                "brief": brief(),
+                "selected_osm_type": "node",
+                "selected_osm_id": 1,
+                "selected_qloo_entity_id": "fixture-near-brand-id",
+            },
+            qloo_search_override=search_payload,
+        )
+    )
+    assert result.business_identity.status == "partially_verified"
+    assert result.business_identity.qloo_status == "resolved"
+    assert result.business_identity.selected_qloo_entity.identity_match_label == (
+        "not an exact match"
+    )
+    assert any(
+        "not an exact name match" in item
+        for item in result.business_identity.limitations
+    )
+    assert result.candidate_checks
+
+
+def test_unverified_qloo_candidates_remain_in_comparisons_without_baseline() -> None:
+    def no_candidate_listings(request: httpx.Request) -> httpx.Response:
+        if request.url.params["q"].startswith(("Fixture Cafe", "Fixture Cosmetics")):
+            return httpx.Response(200, json=[])
+        return synthetic_response(request)
+
+    result = run(
+        run_pipeline(
+            {"brief": brief()},
+            nominatim_override=httpx.MockTransport(no_candidate_listings),
+        )
+    )
+
+    assert result.status == "partial"
+    assert [check.candidate.name for check in result.candidate_checks] == [
+        "Fixture Cafe",
+        "Fixture Cosmetics",
+    ]
+    assert all(check.status == "unverified" for check in result.candidate_checks)
+    assert all(
+        check.verification_message == "unverified: no matching OSM listing found"
+        for check in result.candidate_checks
+    )
+    assert [item.candidate.name for item in result.unexpected_candidates] == [
+        "Fixture Cafe",
+        "Fixture Cosmetics",
+    ]
+    assert all(
+        any(evidence.source_type == "qloo" for evidence in item.candidate.evidence)
+        for item in result.unexpected_candidates
+    )
+    assert result.conventional_baseline is None
+    assert result.baseline_limitation is not None
+    assert "No conventional baseline was found" in result.baseline_limitation
 
 
 def test_pipeline_filters_competitors_scores_and_preserves_provenance() -> None:

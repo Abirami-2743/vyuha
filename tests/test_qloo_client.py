@@ -66,6 +66,7 @@ def test_search_constructs_documented_request_and_parses_live_shape() -> None:
         assert entities[0].entity_id == "test-brand-id"
         assert entities[0].name == "Fixture Brand"
         assert entities[0].entity_type == "urn:entity:brand"
+        assert entities[0].entity_types == ["urn:entity:brand"]
 
     run(exercise())
 
