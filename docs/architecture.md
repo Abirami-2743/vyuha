@@ -1,0 +1,103 @@
+# Vyuha architecture (Task 1 — documentation-verified capabilities)
+
+This is an architecture proposal, not an implementation claim. The Qloo routes and parameters below are limited to capabilities checked against the official Qloo docs on October 14, 2026. Live access and response coverage are verified only by the probe output recorded in [PROGRESS.md](../PROGRESS.md).
+
+## Product goal
+
+Help independent brands and local businesses investigate a potential pop-up or collaboration partner before spending money:
+
+1. Resolve a user-supplied seed entity.
+2. Find candidates from a different Qloo entity category and a same-category alternative.
+3. Challenge the apparent recommendation using only retrieved evidence.
+4. Recommend an option only when evidence supports it; otherwise abstain.
+5. Offer a low-cost experiment and outreach draft as clearly labeled AI interpretation.
+
+Qloo affinity means a taste relationship, not shared customers, demographics, purchase intent, attendance, or commercial success. Tag claims as `qloo`, `external`, `ai_interpretation`, or `unknown`.
+
+## Runtime boundaries
+
+```text
+Next.js frontend (Vercel)
+    | user brief; no API keys
+    v
+FastAPI backend (Render)
+    |-- Qloo client: documented hackathon API calls
+    |-- Nominatim client: optional user-triggered place lookup
+    |-- one OpenAI-compatible LLM client: primary then fallback
+    `-- LangGraph orchestration: bounded, typed nodes
+```
+
+Keep Qloo and LLM keys server-side. Validate inputs and structured LLM output, use request timeouts, redact headers, and expose classified client-safe errors. Retrieved content and user text are untrusted. No database, scraping, or unattended web fetching is required for v1.
+
+## Qloo capabilities this design relies on
+
+| Need | Documented request | Constraint |
+| --- | --- | --- |
+| Resolve a user-provided name | `GET /search?query=...&types=urn:entity:brand` | Search type values are endpoint-specific URNs. Use the ID returned by Qloo; never invent one. [Search reference](https://docs.qloo.com/reference/get-search) |
+| Discover a cross-category candidate | `GET /v2/insights?filter.type=urn:entity:place&signal.interests.entities=<resolved-id>` | This is a brand-to-place example; Qloo documents cross-category Insights and the hackathon guide documents GET/query parameters. [Cross-category overview](https://docs.qloo.com/docs/cross-category-insights), [hackathon guide](https://docs.qloo.com/reference/qloo-llm-hackathon-developer-guide) |
+| Retrieve a same-category alternative | Make a separate Insights request with a documented output `filter.type` matching the seed type | This produces a separate result set. Never compare raw affinity values across separate queries as if they shared a scale. [Insights API](https://docs.qloo.com/reference/insights-api), [FAQ on affinity](https://docs.qloo.com/docs/faqs) |
+
+Only `/search`, `/v2/insights`, `filter.type`, and `signal.interests.entities` are required by this proposal. Do not rely on `/entities`, tags, location filters, demographics, explainability, or direct pairwise-candidate filters until separately checked against the current docs and the hackathon host.
+
+In the tested Insights response, `type` was the generic `urn:entity`, while `subtype` held the requested category (`urn:entity:place`). Preserve both response fields; do not treat the generic `type` value as the candidate category. This shape was observed on one live query, not guaranteed for every response.
+
+## Pipeline and provenance
+
+| Stage | Behavior | Evidence label |
+| --- | --- | --- |
+| Brief parsing | Extract requested seed, event context, location, and budget into a validated schema. Ask for clarification when required details are absent. | `ai_interpretation` |
+| Entity search | Search only the requested name/type. If no unambiguous entity ID is returned, show an unresolved state and stop Qloo discovery. | `qloo` / `unknown` |
+| Cross-category discovery | Feed the resolved ID to Insights, requesting a different documented `filter.type`; preserve the API's returned names and scores without synthesizing candidates. | `qloo` |
+| Same-category alternatives | Run a separate Insights request using the seed category as output. Show this as a different result set, not a score directly comparable to the cross-category query. | `qloo` |
+| Adversarial critique | Ask the LLM for potential failure hypotheses, each tied to supplied evidence or explicitly labeled unknown. The critic may veto or require abstention, but cannot introduce candidate facts. | `ai_interpretation` |
+| Decision | Use an explicit policy. If a decision requires comparing affinity values across independent query contexts, treat them as incomparable and abstain rather than forcing a winner. | `qloo` + product policy |
+| Experiment and outreach | Draft a small, budget-bounded test and optional message. Do not make revenue or attendance predictions or invent contacts. | `ai_interpretation` |
+
+Empty results, unsupported entity types, and timeouts must remain visible as partial failure or abstention; never backfill with LLM-invented entities. Affinity score scales and ranks are query-context dependent; do not imply they are customer-overlap percentages.
+
+## Implemented discovery stages A–D
+
+`POST /discover` accepts the validated `BusinessBrief` plus optional explicit OSM/Qloo identity selections. The backend runs a LangGraph with these bounded stages:
+
+1. **A — business identity:** query public Nominatim for the exact business name and requested city/market. Require one exact-name local listing, or return the matching OSM options for an explicit user choice. Then search Qloo for a brand entity. Exact unique matches may proceed; multiple or non-exact Qloo results require an explicit selection. A supplied website is not fetched. OSM and Qloo do not share an identifier, so matching records are independently supported but cross-source entity linkage remains unverified.
+2. **B — unexpected discovery:** use only the live-checked `urn:entity:brand` seed to `urn:entity:place` Insights query. Exclude the seed itself; retain only returned entities with positive numeric affinity, and cap independent checks at five. No location, tag, or undocumented Qloo filter is used. Missing/non-positive affinity and empty results remain visible as partial/empty states.
+3. **C — independent verification:** search Nominatim by each returned name and market, accepting an identity/location match only when the name and city exactly match. Show ambiguous, missing, or unavailable records as checks, not partner candidates. The Nominatim record does not establish that the result is the same entity Qloo represented, currently operating, available, or willing to collaborate.
+4. **D — conventional baseline and comparison:** compare all independently matched local listings on the same evidence criteria. Select a baseline only when its OSM category or type exactly equals the user's stated industry. If that standard does not produce a candidate, say no defensible baseline was found. Never rank cross-query affinity values; in this implementation the unexpected and conventional classifications come from the same brand-to-place Insights response.
+
+The comparison matrix records evidence relevance, query-relative taste signal, tentative AI-interpreted complementarity and goal alignment, possible category overlap, location/logistical suitability, budget compatibility, and uncertainty. Unavailable prices, operating status, event capacity, contacts, and willingness are unknown. The LLM receives only the brief and retrieved candidate evidence as untrusted data, returns structured hypotheses with evidence references, and cannot add candidates or verification claims. Calls are serialized and spaced; 429 `Retry-After` is honored, and a long wait switches to the fallback rather than retrying early.
+
+Nominatim requests are fixed to its official search host, user-triggered, limited to five results, and paced to at most one request per second in a single backend process. A returned exact-name/locality record supports only that OSM lists such a place. The public service is best-effort, may change, and is not a business registry or operating-status service. A multi-process deployment must enforce the per-application rate limit across workers before using the public endpoint.
+
+## Free complementary source: public OSM Nominatim
+
+Use the free-at-point-of-use public [Nominatim Search API](https://nominatim.org/release-docs/latest/api/Search/) only for a user-triggered check that an OSM place record resembling a returned candidate exists. Its public usage policy is capacity-limited and may change, so this is not an SLA or a basis for high-volume/commercial reliance. The project must remain able to disable or switch this source.
+
+For a single lookup, use `/search` with `q`, `format=jsonv2`, and a small `limit`; `addressdetails=1` and `extratags=1` are optional documented response fields. A match supports only the claim “OSM lists a matching place.” It does not prove that the business is currently operating, that the candidate owns the listing, or that it has an audience fit.
+
+Follow the [Nominatim Usage Policy](https://operations.osmfoundation.org/policies/nominatim/):
+
+- Maximum one request per second per application; send an identifying User-Agent or Referer.
+- Display OSM attribution and follow ODbL obligations.
+- Do not implement autocomplete, systematic area searches, bulk POI downloads, or automated detail-page scraping.
+- Cache repeated user queries, use a proxy where possible, and be ready to switch service.
+- No match means `unknown`, not “business does not exist.”
+
+## LLM and decision safeguards
+
+Use only the configured primary and fallback OpenAI-compatible endpoints. Request JSON output and validate it against a Pydantic schema. The LLM can parse briefs and draft evidence-bounded critique/experiments; it cannot create Qloo IDs, results, affinities, or external verification.
+
+The decision layer abstains if:
+
+- the seed entity cannot be resolved;
+- no usable Insights results are returned;
+- the critic finds a blocking evidence gap; or
+- the preferred option depends on comparing incomparable cross-query scores.
+
+Fixtures are isolated to tests and never enter the production recommendation path.
+
+## Verified versus unverified
+
+- **Verified by current docs:** hackathon API host/header, `GET /search`, `GET /v2/insights`, Search URN values, Insights `filter.type`, entity-interest signals, cross-category affinity, and affinity-score limitations. See the audit in [qloo-capabilities.md](./qloo-capabilities.md).
+- **Verified for the complementary lookup:** Nominatim search parameters and public-instance policy, from the linked official docs.
+- **Verified live for one query:** Qloo key authentication, name resolution, Search `entity_id`, and a non-empty brand-to-place response; the LLM fallback returned valid JSON. The configured primary LLM returned HTTP 429, so its structured-JSON behavior remains unverified.
+- **Still requires live validation:** coverage for other queries/categories/locations, no-result handling, exact affinity fields/scales, and primary-provider JSON-mode/rate-limit behavior. See [PROGRESS.md](../PROGRESS.md).

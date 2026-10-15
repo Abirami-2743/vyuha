@@ -1,0 +1,1 @@
+"""Vyuha FastAPI application package."""
