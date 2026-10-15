@@ -206,6 +206,61 @@ def test_explicit_osm_choice_resolves_business_identity_and_continues() -> None:
     assert result.candidate_checks
 
 
+def test_non_exact_qloo_search_result_is_not_offered_as_business_identity() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "nominatim.openstreetmap.org":
+            return httpx.Response(
+                200, json=nominatim_payload("Fixture Skin", 10, "business")
+            )
+        if (
+            request.url.host == "hackathon.api.qloo.com"
+            and request.url.path == "/search"
+        ):
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "entity_id": "fixture-unrelated-id",
+                            "name": "Unrelated Brand",
+                            "types": ["urn:entity:brand"],
+                            "properties": {},
+                        }
+                    ]
+                },
+            )
+        return synthetic_response(request)
+
+    async def exercise() -> Any:
+        settings = make_settings()
+        qloo = QlooClient(settings, transport=httpx.MockTransport(handle))
+        verifier = NominatimClient(
+            transport=httpx.MockTransport(handle), sleep=no_sleep
+        )
+        llm = LLMClient(settings, transport=httpx.MockTransport(handle), sleep=no_sleep)
+        try:
+            return await DiscoveryPipeline(qloo, verifier, llm).run(
+                DiscoveryRequest.model_validate(
+                    {
+                        "brief": brief(),
+                        "selected_osm_type": "node",
+                        "selected_osm_id": 10,
+                    }
+                )
+            )
+        finally:
+            await qloo.aclose()
+            await verifier.aclose()
+            await llm.aclose()
+
+    result = run(exercise())
+    assert result.status == "partial"
+    assert result.business_identity.qloo_status == "not_found"
+    assert result.business_identity.qloo_options == []
+    assert result.candidate_checks == []
+    assert "none matched 'Fixture Skin' exactly" in result.limitations[0]
+
+
 def test_pipeline_filters_competitors_scores_and_preserves_provenance() -> None:
     result = run(run_pipeline({"brief": brief()}))
 

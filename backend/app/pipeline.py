@@ -180,13 +180,28 @@ class DiscoveryPipeline:
             for entity in qloo_results
             if normalize_text(entity.name) == normalize_text(brief.business_name)
         ]
-        qloo_options = exact_qloo or qloo_results
+        if not exact_qloo:
+            identity = BusinessIdentity(
+                status="not_found",
+                osm_status="verified",
+                qloo_status="not_found",
+                osm_options=[selected_osm],
+                selected_osm_place=selected_osm,
+                evidence=[osm_evidence],
+                limitations=[
+                    f"Qloo Search returned {len(qloo_results)} result(s), but none matched "
+                    f"{brief.business_name!r} exactly. Non-exact related results are not treated "
+                    "as the business identity."
+                ],
+            )
+            return {"identity": identity, "result": self._early_result(identity)}
+
         selected_qloo: ResolvedEntity | None = None
         if request.selected_qloo_entity_id is not None:
             selected_qloo = next(
                 (
                     entity
-                    for entity in qloo_results
+                    for entity in exact_qloo
                     if entity.entity_id == request.selected_qloo_entity_id
                 ),
                 None,
@@ -197,7 +212,7 @@ class DiscoveryPipeline:
                     osm_status="verified",
                     qloo_status="selection_invalid",
                     osm_options=[selected_osm],
-                    qloo_options=[self._as_candidate(item) for item in qloo_options[:20]],
+                    qloo_options=[self._as_candidate(item) for item in exact_qloo[:20]],
                     selected_osm_place=selected_osm,
                     evidence=[osm_evidence],
                     limitations=["The selected Qloo entity was not among this Search response."],
@@ -205,32 +220,18 @@ class DiscoveryPipeline:
                 return {"identity": identity, "result": self._early_result(identity)}
         elif len(exact_qloo) == 1:
             selected_qloo = exact_qloo[0]
-        elif qloo_options:
+        else:
             identity = BusinessIdentity(
                 status="needs_user_choice",
                 osm_status="verified",
                 qloo_status="ambiguous",
                 osm_options=[selected_osm],
-                qloo_options=[self._as_candidate(item) for item in qloo_options[:20]],
+                qloo_options=[self._as_candidate(item) for item in exact_qloo[:20]],
                 selected_osm_place=selected_osm,
                 evidence=[osm_evidence],
                 limitations=[
                     "Qloo returned multiple possible seed entities; select one explicitly. "
                     "A name-only match is not silently treated as identity."
-                ],
-            )
-            return {"identity": identity, "result": self._early_result(identity)}
-        else:
-            identity = BusinessIdentity(
-                status="not_found",
-                osm_status="verified",
-                qloo_status="not_found",
-                osm_options=[selected_osm],
-                selected_osm_place=selected_osm,
-                evidence=[osm_evidence],
-                limitations=[
-                    "The business has an exact local OSM listing, but Qloo Search returned "
-                    "no brand entity. Discovery cannot fabricate a Qloo seed."
                 ],
             )
             return {"identity": identity, "result": self._early_result(identity)}
