@@ -1,4 +1,4 @@
-# Vyuha progress — Task 3 of 7
+# Vyuha progress — Task 4 of 7
 
 Updated: October 16, 2026
 
@@ -7,6 +7,7 @@ Updated: October 16, 2026
 - Task 1: audited the official Qloo and hackathon documentation; checked environment configuration; added Qloo/LLM probes and recorded live verified/unverified capabilities.
 - Task 2: added Pydantic schemas, Qloo and OpenAI-compatible LLM clients, FastAPI health/configuration, safe structured logging, CORS/request limits, and isolated client tests.
 - Task 3, stages A–D: added validated business briefs, explicit OSM/Qloo identity choices, LangGraph discovery, Qloo brand-to-place Insights, Nominatim verification, evidence-bounded interpretation, and a same-response conventional-baseline comparison.
+- Task 4: added a separate LangGraph critic/decision/experiment/outreach graph, schema-validated evidence citations, deterministic provisional/final ratings, abstention and baseline selection, and the streaming `POST /analyze` endpoint.
 - Qloo requests use the observed/documented `GET /search` and `GET /v2/insights` contracts. Search receives the business name only plus `types=urn:entity:brand`; it does not append city text. Insights uses the checked `filter.type=urn:entity:place` and `signal.interests.entities` parameters, with no location/tag filters.
 - Qloo Search exact names are preferred. If none are returned, up to five results whose response `types` include the requested brand type are offered with `identity_match_label="not an exact match"` and the pipeline waits for an explicit Qloo entity selection. Results explicitly typed as a different entity kind are excluded. Brand type does not establish that a near-match is the intended business; explicit selection marks the identity only partially verified.
 - Stage C retains candidates without an exact local OSM result as `unverified: no matching OSM listing found`, preserves their Qloo evidence, and records missing evidence. Ambiguous or unavailable checks also remain visible.
@@ -93,6 +94,30 @@ Full captured JSON for all four endpoint responses (The Ordinary, Nike/Portland,
 - The no-entity seed path and per-seed provenance are live-tested only for the recorded brands and markets. Cross-seed affinity scores are not comparable and are not evidence of shared customers.
 - The Ordinary's own Qloo identity remains unresolved; the seed path is a fallback explicitly based on the supplied seeds.
 
+## Task 4 — critic, decision, experiment, outreach
+
+- Added a separate LangGraph analysis flow with critic, deterministic decision, experiment, and outreach nodes. `/analyze` emits server-sent JSON progress for completed discovery and analysis stages; only the final analysis event contains the complete output.
+- Rule-based criticisms cover single-source Qloo taste evidence, unresolved/ambiguous map verification, unverified Qloo/OSM linkage, user-supplied seed provenance, radius versus city boundaries, missing budget/logistics/availability evidence, unchecked brief constraints, baseline availability/strength, and outside-market/no-positive-signal cases.
+- The LLM receives only precomputed finding templates and exact citation allowlists, not candidate names or retrieved free text. Every returned finding must match the expected finding IDs and citations; wording with unsupported audience/customer/demographic claims or additional unsupported terms is rejected. The recorded live Nike critic text was rejected by validation; the The Ordinary critic call had no provider return a usable response. Both used rule-based criticism and decisions.
+- Deterministic rating rules are documented in [docs/decision-logic.md](docs/decision-logic.md). Provisional ratings are computed before critic deductions. Criticism severity causes a downgrade; ratings are not probabilities. If all candidates are `SKIP`, the overall result is `no candidate supported`. A higher-rated verified conventional baseline wins; ties favor the baseline conservatively. Experiments and outreach are generated only for candidates rated `WORTH TESTING` or `STRONG FIT`.
+- Live analysis used the saved real discovery responses for Nike/Portland and The Ordinary/New York (Sephora and Glossier seed inputs). All five candidates in each sample had provisional `WORTH TESTING` ratings. Nike/Portland finished with four `SKIP` ratings and SEPHORA retained `WORTH TESTING`; The Ordinary/New York finished with four `SKIP` ratings and Café Habana retained `WORTH TESTING`. Both overall results are `WORTH TESTING`; the selected candidates are SEPHORA and Café Habana respectively. Each run produced one experiment and one unsent outreach draft. No conventional baseline was available in either sample. Full outputs, including findings, citations, effects, and rating changes, are in [docs/live-samples/task-4-nike-portland-analysis.json](docs/live-samples/task-4-nike-portland-analysis.json) and [docs/live-samples/task-4-ordinary-new-york-seeds-analysis.json](docs/live-samples/task-4-ordinary-new-york-seeds-analysis.json).
+- The prompt-injection test exposed candidate-name text leaking into generated rationale. Deterministic rationale and experiment narrative now refer to “the selected candidate” / “the candidate” rather than embedding untrusted names; candidate names are not sent to the LLM critic.
+- No finding establishes that audience overlap exists. No outreach was sent. Seed-derived results remain explicitly distinct from evidence about The Ordinary itself.
+
+### Task 4 limitations / still unverified
+
+- The LLM critic's paraphrases are intentionally restrictive; the live Nike response introduced wording outside the evidence vocabulary and was rejected. The The Ordinary request did not receive a usable response. Rule-based criticisms worked in both cases; successful LLM-authored critic wording is not verified.
+- `STRONG FIT` requires verified Qloo-to-OSM linkage plus supported budget, logistics, and goal criteria. Those facts were not established in either live sample, so no candidate can currently reach that rating from these outputs.
+- These analyses reuse captured live discovery data; the critic/decision layer was run against those saved results. It does not verify that Qloo affinities predict commercial outcomes, event feasibility, or customer overlap.
+
+### Task 4 validation
+
+- `python -m pytest tests -q` — **50 passed in 11.25s**.
+- `python -m ruff check backend\app backend\scripts tests` — **All checks passed!**
+- `python -m ruff format --check backend\app backend\scripts tests` — **24 files already formatted**.
+- `python -m mypy --config-file backend\pyproject.toml backend tests` — **Success: no issues found in 25 source files**.
+- The suite includes synthetic fixture tests; these results do not represent live API verification.
+
 ## Next
 
-- Task 3b complete. Do not start Task 4 until requested.
+- Task 4 complete. Do not start Task 5 until requested.

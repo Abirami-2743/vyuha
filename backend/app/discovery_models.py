@@ -76,7 +76,7 @@ class CandidateCheck(StrictModel):
     place_matches: list[OSMPlace] = Field(default_factory=list, max_length=5)
     verified_identity: bool = False
     verified_location: bool = False
-    qloo_osm_entity_linkage: Literal["unverified"] = "unverified"
+    qloo_osm_entity_linkage: Literal["verified", "unverified"] = "unverified"
     operating_status: Literal["unknown"] = "unknown"
     evidence: list[EvidenceItem] = Field(default_factory=list, max_length=10)
     missing_evidence: list[str] = Field(default_factory=list, max_length=20)

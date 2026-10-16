@@ -12,8 +12,9 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
+from .analysis_models import AnalysisStreamEvent
 from .discovery_models import DiscoveryRequest, DiscoveryResult
 from .errors import IntegrationError
 from .llm import LLMClient
@@ -212,6 +213,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @application.post("/discover", response_model=DiscoveryResult)
     async def discover(request: DiscoveryRequest) -> DiscoveryResult:
         return await application.state.discovery_pipeline.run(request)
+
+    @application.post("/analyze")
+    async def analyze(request: DiscoveryRequest) -> StreamingResponse:
+        async def events() -> AsyncIterator[str]:
+            try:
+                async for event in application.state.discovery_pipeline.analyze_stream(request):
+                    yield f"data: {event.model_dump_json()}\n\n"
+            except IntegrationError as exc:
+                logger.warning(
+                    "analysis_stream_failed",
+                    extra={
+                        "event": "analysis_stream_failed",
+                        "error_code": exc.code,
+                        "status_code": exc.status_code,
+                    },
+                )
+                failed = AnalysisStreamEvent(
+                    stage="analysis",
+                    status="failed",
+                    message=exc.public_message,
+                )
+                yield f"data: {failed.model_dump_json()}\n\n"
+
+        return StreamingResponse(
+            events(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     return application
 

@@ -125,8 +125,11 @@ class SeedAffinity(StrictModel):
 
 
 class Criticism(StrictModel):
+    code: str = Field(min_length=1, max_length=100)
+    candidate_entity_id: str | None = Field(default=None, max_length=256)
     issue: str = Field(min_length=1, max_length=1_000)
     evidence: list[EvidenceItem] = Field(default_factory=list, max_length=50)
+    supporting_evidence_references: list[str] = Field(min_length=1, max_length=20)
     severity: Literal["low", "medium", "high"]
     resolvable: bool
     effect_on_recommendation: str = Field(min_length=1, max_length=1_000)
@@ -144,6 +147,12 @@ class Experiment(StrictModel):
     budget: BudgetRange | None = None
     success_criteria: list[str] = Field(min_length=1, max_length=20)
     duration_days: int = Field(ge=1, le=90)
+    test_format: str = Field(min_length=1, max_length=500)
+    event_structure: list[str] = Field(default_factory=list, max_length=20)
+    costs_to_verify: list[str] = Field(min_length=1, max_length=20)
+    assumptions: list[str] = Field(default_factory=list, max_length=20)
+    risks: list[str] = Field(default_factory=list, max_length=20)
+    next_step: str = Field(min_length=1, max_length=500)
 
 
 class OutreachDraft(StrictModel):
@@ -151,3 +160,4 @@ class OutreachDraft(StrictModel):
     subject: str = Field(min_length=1, max_length=200)
     body: str = Field(min_length=1, max_length=4_000)
     channel: Literal["email", "direct_message", "other"] = "email"
+    facts_not_verified: list[str] = Field(min_length=1, max_length=20)

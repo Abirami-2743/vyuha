@@ -2,9 +2,13 @@
 
 import json
 import logging
+from collections.abc import AsyncIterator
 
+import pytest
 from fastapi.testclient import TestClient
 
+import backend.app.main as main_module
+from backend.app.analysis_models import AnalysisStreamEvent
 from backend.app.logging_config import JsonFormatter
 from backend.app.main import create_app
 from backend.app.settings import Settings
@@ -79,3 +83,44 @@ def test_discovery_endpoint_exposes_validated_request_contract() -> None:
 
     assert "/discover" in schema["paths"]
     assert "post" in schema["paths"]["/discover"]
+
+
+def test_analyze_endpoint_streams_stage_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class PipelineFixture:
+        def __init__(self, *_: object) -> None:
+            pass
+
+        async def analyze_stream(self, _: object) -> AsyncIterator[AnalysisStreamEvent]:
+            for stage, status in (
+                ("discovery_identity", "complete"),
+                ("critic", "degraded"),
+                ("decision", "complete"),
+                ("experiment", "complete"),
+                ("outreach", "complete"),
+                ("analysis", "complete"),
+            ):
+                yield AnalysisStreamEvent(
+                    stage=stage,  # type: ignore[arg-type]
+                    status=status,  # type: ignore[arg-type]
+                    message="Fixture progress event.",
+                )
+
+    monkeypatch.setattr(main_module, "DiscoveryPipeline", PipelineFixture)
+    request = {
+        "brief": {
+            "business_name": "Fixture Business",
+            "identifying_info": "Synthetic test business",
+            "city": "Portland",
+            "collaboration_goal": "Host a small community pop-up",
+            "budget_range": {"minimum": 0, "maximum": 100, "currency": "USD"},
+        }
+    }
+    with TestClient(create_app(make_settings())) as client:
+        response = client.post("/analyze", json=request)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert '"stage":"critic","status":"degraded"' in response.text
+    assert '"stage":"analysis","status":"complete"' in response.text

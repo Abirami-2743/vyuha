@@ -37,7 +37,7 @@ Keep Qloo and LLM keys server-side. Validate inputs and structured LLM output, u
 | Discover a cross-category candidate | `GET /v2/insights?filter.type=urn:entity:place&signal.interests.entities=<resolved-id>` | This is a brand-to-place example; Qloo documents cross-category Insights and the hackathon guide documents GET/query parameters. [Cross-category overview](https://docs.qloo.com/docs/cross-category-insights), [hackathon guide](https://docs.qloo.com/reference/qloo-llm-hackathon-developer-guide) |
 | Retrieve a same-category alternative | Make a separate Insights request with a documented output `filter.type` matching the seed type | This produces a separate result set. Never compare raw affinity values across separate queries as if they shared a scale. [Insights API](https://docs.qloo.com/reference/insights-api), [FAQ on affinity](https://docs.qloo.com/docs/faqs) |
 
-Only `/search`, `/v2/insights`, `filter.type`, and `signal.interests.entities` are required by this proposal. Do not rely on `/entities`, tags, location filters, demographics, explainability, or direct pairwise-candidate filters until separately checked against the current docs and the hackathon host.
+The pipeline uses `/search`, `/v2/insights`, `filter.type`, `signal.interests.entities`, and the documented Place Insights `filter.location` WKT point plus `filter.location.radius`. The location filter was live-tested for the markets recorded in [PROGRESS.md](../PROGRESS.md); a 100-mile radius is not a city boundary. Do not rely on `/entities`, tags, demographics, explainability, or direct pairwise-candidate filters until separately checked against current docs and the hackathon host.
 
 In the tested Insights response, `type` was the generic `urn:entity`, while `subtype` held the requested category (`urn:entity:place`). Preserve both response fields; do not treat the generic `type` value as the candidate category. This shape was observed on one live query, not guaranteed for every response.
 
@@ -60,13 +60,38 @@ Empty results, unsupported entity types, and timeouts must remain visible as par
 `POST /discover` accepts the validated `BusinessBrief` plus optional explicit OSM/Qloo identity selections. The backend runs a LangGraph with these bounded stages:
 
 1. **A — business identity:** query public Nominatim for the exact business name and requested city/market. Require one exact-name local listing, or return the matching OSM options for an explicit user choice. Then search Qloo for a brand entity using the business name only (never append the city). Prefer exact normalized name matches; if multiple exact matches exist, return those options. When no exact match exists, return up to five results whose response types include the requested brand type, label every option `not an exact match`, and require explicit user selection. Exclude results whose returned types establish that they are not brands; missing type metadata does not establish an exclusion. An explicit selection allows later discovery but does not verify that the Qloo entity is the supplied business, so identity is marked partially verified. A supplied website is not fetched. OSM and Qloo do not share an identifier, so cross-source entity linkage remains unverified.
-2. **B — unexpected discovery:** use only the live-checked `urn:entity:brand` seed to `urn:entity:place` Insights query. Exclude the seed itself; retain only returned entities with positive numeric affinity, and cap independent checks at five. No location, tag, or undocumented Qloo filter is used. Missing/non-positive affinity and empty results remain visible as partial/empty states.
+2. **B — unexpected discovery:** use only the live-checked `urn:entity:brand` seed to `urn:entity:place` Insights query. Exclude the seed itself; retain only returned entities with positive numeric affinity, and cap independent checks at five. Use the selected business OSM coordinates for the documented WKT point/radius filter. The radius is not a city boundary; use returned Qloo city metadata only as Qloo evidence and check candidate locality independently. Missing/non-positive affinity and empty results remain visible as partial/empty states.
 3. **C — independent verification:** search Nominatim by each returned name and market, accepting a local identity/location match only when the name and city exactly match. Keep candidates with no exact local OSM match, mark them `unverified: no matching OSM listing found`, preserve their Qloo evidence, and list the missing evidence. Ambiguous or unavailable results also remain visible as checks. None of these states establishes that the result is the same entity Qloo represented, currently operating, available, or willing to collaborate.
 4. **D — conventional baseline and comparison:** pass every candidate check, including unverified ones, to evidence-bounded interpretation and comparison. With a stated industry, unverified candidates remain visible in the unexpected-results list with identity/location uncertainty; they can never serve as the conventional baseline. Select a baseline only when its OSM category or type exactly equals the user's stated industry. If that standard does not produce a candidate, say no defensible baseline was found while still returning the unexpected candidates. Never rank cross-query affinity values; in this implementation the unexpected and conventional classifications come from the same brand-to-place Insights response.
 
 The comparison matrix records evidence relevance, query-relative taste signal, tentative AI-interpreted complementarity and goal alignment, possible category overlap, location/logistical suitability, budget compatibility, and uncertainty. Unavailable prices, operating status, event capacity, contacts, and willingness are unknown. The LLM receives only the brief and retrieved candidate evidence as untrusted data, returns structured hypotheses with evidence references, and cannot add candidates or verification claims. Calls are serialized and spaced; 429 `Retry-After` is honored, and a long wait switches to the fallback rather than retrying early.
 
 Nominatim requests are fixed to its official search host, user-triggered, limited to five results, and paced to at most one request per second in a single backend process. A returned exact-name/locality record supports only that OSM lists such a place. The public service is best-effort, may change, and is not a business registry or operating-status service. A multi-process deployment must enforce the per-application rate limit across workers before using the public endpoint.
+
+## Task 4 — adversarial critic and deterministic decision
+
+`POST /analyze` runs discovery then streams server-sent JSON progress events for identity,
+candidate retrieval, verification, comparison, critic, decision, experiment, and outreach. Only
+completed nodes are marked complete. The analysis graph has separate critic, decision,
+experiment, and outreach nodes.
+
+The critic receives rule-generated evidence facts, not candidate names or retrieved free text. It
+can restate only allowlisted findings, with exact evidence references; invented references,
+unsupported audience/demographic claims, and wording that introduces ungrounded terms are
+rejected. If the LLM is unavailable or rejected, deterministic criticism and decisions still run
+and the critic stage is marked degraded.
+
+Provisional and final ratings come from deterministic rules, not an LLM. The provisional rating
+requires positive Qloo evidence and a same-market signal; critic severity applies explicit
+deductions. `STRONG FIT` requires verified local entity linkage and supported budget, logistics,
+and goal evidence. If every candidate is `SKIP`, the overall result is `no candidate supported`.
+A stronger conventional baseline wins over a lower-rated unexpected candidate; ties conservatively
+favor the baseline without claiming commercial superiority. Full rules and deductions are in
+[decision-logic.md](./decision-logic.md).
+
+Experiments and outreach are generated only for `WORTH TESTING` or `STRONG FIT`. Suggested
+success criteria are labeled, costs are items to verify, and outreach is a draft that discloses
+uncertainty; no message is sent.
 
 ## Free complementary source: public OSM Nominatim
 
