@@ -4,120 +4,31 @@ Updated: October 16, 2026
 
 ## Done
 
-- Task 1: audited the official Qloo and hackathon documentation; checked environment configuration; added Qloo/LLM probes and recorded live verified/unverified capabilities.
-- Task 2: added Pydantic schemas, Qloo and OpenAI-compatible LLM clients, FastAPI health/configuration, safe structured logging, CORS/request limits, and isolated client tests.
-- Task 3, stages A–D: added validated business briefs, explicit OSM/Qloo identity choices, LangGraph discovery, Qloo brand-to-place Insights, Nominatim verification, evidence-bounded interpretation, and a same-response conventional-baseline comparison.
-- Task 4: added a separate LangGraph critic/decision/experiment/outreach graph, schema-validated evidence citations, deterministic provisional/final ratings, abstention and baseline selection, and the streaming `POST /analyze` endpoint.
-- Qloo requests use the observed/documented `GET /search` and `GET /v2/insights` contracts. Search receives the business name only plus `types=urn:entity:brand`; it does not append city text. Insights uses the checked `filter.type=urn:entity:place` and `signal.interests.entities` parameters, with no location/tag filters.
-- Qloo Search exact names are preferred. If none are returned, up to five results whose response `types` include the requested brand type are offered with `identity_match_label="not an exact match"` and the pipeline waits for an explicit Qloo entity selection. Results explicitly typed as a different entity kind are excluded. Brand type does not establish that a near-match is the intended business; explicit selection marks the identity only partially verified.
-- Stage C retains candidates without an exact local OSM result as `unverified: no matching OSM listing found`, preserves their Qloo evidence, and records missing evidence. Ambiguous or unavailable checks also remain visible.
-- Stage D passes all candidate checks through evidence-bounded interpretation/comparison. With an industry supplied, unverified candidates remain visible as unexpected results and can never become the conventional baseline. A missing baseline is explicit; verified exact OSM category/type matching remains the baseline rule.
-- Added isolated synthetic tests for explicit near-match selection, entity-type filtering, Search query parameters without city augmentation, retained unverified candidates, baseline limitation, and Qloo Search type parsing. Fixtures are not live evidence.
-- Updated [docs/architecture.md](docs/architecture.md) to match the current selection, verification, and comparison behavior.
-- No `.env` values were printed. All seven required `.env` keys were present at run time.
+- Tasks 1–4: verified Qloo capabilities, built typed FastAPI/LangGraph discovery and critic flows, and implemented deterministic ratings, abstention, experiments, and unsent outreach drafts.
+- Task 4b implementation: discovery makes one rate-limited Nominatim category search and adds up to three same-city places only when returned OSM `category` or `type` exactly matches the brief industry. They pass through verification, comparison, and critic rules.
+- OSM-only baselines explicitly have no Qloo taste query and are not like-for-like. Existing Qloo-positive rating requirements remain unchanged; no baseline is reported if none is found.
+- Live reran both original briefs. Nike/Portland: OSM baseline Classic Collection Hats (`shop/clothes`) was `SKIP`; SEPHORA was the best unexpected pick (`WORTH TESTING`), so the baseline did not beat it. The Ordinary/New York: OSM baseline Sephora (`shop/cosmetics`) was `SKIP`; Café Habana was the best unexpected pick (`WORTH TESTING`), so the baseline did not beat it.
+- Nike critic text was rejected and Ordinary critic text was unavailable; deterministic critic rules ran in both analyses. Selected-candidate experiments and explicitly unsent outreach drafts are saved in the live outputs.
+- Docs and regression tests updated. No `.env` values were printed.
 
-## Live results — current `/discover` reruns
+## Verified capabilities
 
-### Qloo Search discrepancy: The Ordinary
+- Qloo Search and Place Insights, including the documented WKT location/radius filter. A 100-mile radius is not a city boundary; affinity is not customer overlap.
+- Live Nominatim category search returned five same-city `shop/clothes` results for Portland, Oregon, and five `shop/cosmetics` results for New York, NY. The pipeline accepts at most three and validates city/category fields.
+- Sanitized live outputs: [Nike/Portland](docs/live-samples/task-4b-nike-portland-live.json) and [The Ordinary/New York](docs/live-samples/task-4b-ordinary-new-york-live.json). Full experiment/outreach drafts are included.
+- `python -m pytest tests -q` — 52 passed.
+- `python -m ruff check backend\app backend\scripts tests` — All checks passed.
+- `python -m ruff format --check backend\app backend\scripts tests` — 24 files already formatted.
+- `python -m mypy --config-file backend\pyproject.toml backend tests` — Success: no issues found in 25 source files.
 
-- Task 2 probe request: `GET https://hackathon.api.qloo.com/search?query=The+Ordinary&types=urn%3Aentity%3Abrand`.
-- Pipeline request after selecting `node/5709446984` (26 Prince Street): the same `GET /search` with `query=The Ordinary` and `types=urn:entity:brand`. No city or market is appended.
-- Replaying that exact request now returned HTTP 200 with `AOMG`, entity ID `E64B297C-3BFC-4247-B0BB-504A3548D50A`, types `["urn:entity:brand"]`. The current Task 2 probe and pipeline request parameters match. The prior Task 2 result is recorded as resolving the correct entity, but its raw response body was not retained; the historical result cannot be compared byte-for-byte. The observed difference is in Qloo's returned catalog result, not request construction.
-- Current `POST /discover` returned HTTP 200, `status=needs_user_choice`: the Prince Street OSM record was selected/verified, and AOMG was returned only as an explicitly labeled `not an exact match` Qloo option. Its returned type is a brand, so the type filter alone cannot exclude it; the pipeline did not claim it was The Ordinary and did not run Insights or produce candidates/comparisons. An explicit Qloo entity choice is still required.
+## In progress
 
-### Nike — clothes, Portland, Oregon
+- None.
 
-- `POST /discover` returned HTTP 200, `status=partial`. Selected OSM seed: Nike, `node/6508564691`, 638 Southwest 5th Avenue, Portland. Qloo Search resolved Nike, entity ID `C70CE2B8-0AD1-4150-BF18-5A6347F2E860`.
-- Live Insights returned these five positive-affinity place entities; each retained its Qloo evidence reference `/v2/insights?filter.type=urn:entity:place&signal.interests.entities=C70CE2B8-0AD1-4150-BF18-5A6347F2E860`:
-  - `ZT The Golden Hotel Barcelona` — `0.9423525470173761` — unverified, no matching Portland OSM listing.
-  - `Mercedes Heritage Apartments Barcelona` — `0.9389725440634531` — unverified, no matching Portland OSM listing.
-  - `Meliá Paris La Défense` — `0.9387765010871101` — unverified, no matching Portland OSM listing.
-  - `Seven Hotel` — `0.9362683100709767` — unverified, no matching Portland OSM listing.
-  - `Hotel SB Glow` — `0.9350479947320841` — unverified, no matching Portland OSM listing.
-- All five candidates flowed into comparisons with verification uncertainty; no conventional baseline was available because no candidate had a verified OSM category/type matching `clothes`. Affinity is a Qloo relative signal for this query, not customer overlap.
+## Blocked
 
-### Nike — clothes, Barcelona, Spain
-
-- An initial `POST /discover` returned HTTP 200, `status=needs_user_choice`, with two exact-name OSM Nike locations. For this additional example, the explicit location selection was `node/704065010`, Passeig de Gràcia 17, Barcelona.
-- The selected run returned HTTP 200, `status=partial`, and resolved Nike to the same Qloo seed ID above. Insights returned the same five Qloo entities and query-relative affinities.
-- `ZT The Golden Hotel Barcelona`, `Mercedes Heritage Apartments Barcelona`, `Meliá Paris La Défense`, and `Seven Hotel` remained `unverified: no matching OSM listing found` in the requested market.
-- `Hotel SB Glow` had an exact-name OSM listing: `way/430222965`, Carrer de Badajoz, Barcelona, category `tourism`, type `hotel`. It is shown as a candidate with Qloo evidence and the independent OSM listing, not as proof that the two sources refer to the same entity or that the hotel is operating/available.
-- All five candidates flowed into comparison. No conventional baseline was selected because no verified candidate's OSM category/type exactly matched the stated `clothes` industry. The response remained partial because four checks were unverified and operational/logistical evidence is missing.
-
-Full captured JSON for all four endpoint responses (The Ordinary, Nike/Portland, Nike/Barcelona before location choice, and Nike/Barcelona after the explicit choice), plus the sanitized current Qloo Search replay, is retained in the current session artifact `live-discover-results.json`. It contains no credentials.
-
-## Validation
-
-- `python -m pytest tests -q` — **40 passed in 16.98s** (Task 3b final run).
-- `python -m ruff check backend\app backend\scripts tests` — **All checks passed**.
-- `python -m ruff format --check backend\app backend\scripts tests` — **21 files already formatted**.
-- `python -m mypy --config-file backend\pyproject.toml backend tests` — **Success: no issues found in 22 source files**.
-- Tests use synthetic fixtures and are not proof of live integration.
-
-## Verified vs. unverified capabilities
-
-### Verified with real calls
-
-- Qloo authentication, Search for Nike and The Ordinary, and the checked brand-to-place Insights route.
-- Qloo Search can return a brand-typed non-exact result (`AOMG`) for a The Ordinary query; current exact request construction is covered by a pipeline regression test.
-- Nominatim returned exact local records for The Ordinary / New York, Nike / Portland, and Hotel SB Glow / Barcelona.
-- `/discover` now returns the required near-match choice state and retains unverified candidates in candidate checks and comparisons. The live Nike/Barcelona case included one exact-name local OSM match.
-
-### Still unverified
-
-- The Qloo identity represented by `AOMG` is not verified as The Ordinary. The Ordinary discovery cannot continue until a user explicitly selects one of the offered Qloo results; this option remains a non-exact brand match.
-- Cross-source Qloo/OSM identity linkage, current operations, ownership, event availability, price, contacts, willingness to collaborate, and commercial outcomes.
-- Qloo affinity scale and cross-query comparability; affinity is not a shared-customer metric.
-- OSM coverage beyond the tested places; a missing listing is not proof the business does not exist.
-- Successful primary LLM structured output; previous Task 2 live checks observed primary rate limits and successful fallback.
-
-## Task 3b — local discovery and user-supplied seed fallback
-
-### Verified location behavior
-
-- Official Qloo Location Insights documentation describes custom geo-points and boundaries; the Place Insights parameter guide documents `filter.location` and `filter.location.radius`. See [Qloo Location Insights](https://docs.qloo.com/docs/insights-with-location) and [available parameters by entity type](https://github.com/qloo/docs-public/blob/main/reference/available-parameters-by-entity-type.md).
-- Live Nike/Portland and Nike/Barcelona checks using `filter.location=POINT(longitude latitude)` with `filter.location.radius=100` returned HTTP 200 and place entities whose Qloo geocode city matched the requested city (Portland and Barcelona respectively). The pipeline now sends the documented WKT point and radius using the selected business OSM coordinates.
-- A bare `latitude,longitude` value returned HTTP 400 (`WKT format is invalid and cannot be parsed`). Radius 10 and 25 mile queries returned HTTP 200 with no entities for the tested Nike seed/markets; radius 100 returned entities. `filter.address=Portland` is not a city filter: a live request returned a Manchester hotel on Portland Street. Name/region/country geocode filters returned empty results for the tested request.
-- A 100-mile radius does not define a city boundary. Qloo city metadata is treated as a Qloo-only location signal; the pipeline independently checks exact-name Nominatim/OSM matches and labels each result `osm_same_city_unlinked`, `qloo_same_city_unverified`, `out_of_market`, or `unverified`. Out-of-market candidates are listed separately, not presented as local recommendations.
-
-### Seed-brand path
-
-- When the business has no exact Qloo brand result, a request may include one to three user-supplied seed brands. Each seed is searched with `GET /search` and `types=urn:entity:brand`; exact unique results resolve, while non-exact or ambiguous results require explicit selection. If a seed needs a choice, discovery pauses and returns the options. Unresolved seeds are reported rather than replaced with invented entities.
-- Discovery runs Insights separately for each resolved seed. Candidate provenance states that results derive from user-supplied seeds, not the user's own brand or evidence about its customers. When a candidate occurs for multiple seeds, its per-seed affinity values remain separate; the combined `affinity_score` is omitted rather than treating cross-query values as comparable.
-- The live The Ordinary/New York run used Sephora and Glossier as user-supplied seeds after Qloo did not provide an exact business match. Both seeds resolved, and the result was marked `discovery_basis=user_supplied_seeds` and `status=partial`. This verifies the tested path, not that The Ordinary's customers like either seed.
-- Full captured responses are in [docs/live-samples/task-3b-nike-portland.json](docs/live-samples/task-3b-nike-portland.json) and [docs/live-samples/task-3b-ordinary-new-york-seeds.json](docs/live-samples/task-3b-ordinary-new-york-seeds.json). See [docs/live-samples/README.md](docs/live-samples/README.md) for capture context.
-
-### Still unverified / limitations
-
-- A 100-mile Qloo radius can extend outside city limits; whether the API applies additional geospatial interpretation beyond the tested geocodes is not established. Do not call radius-filtered candidates local without same-city evidence.
-- City metadata returned by Qloo is not independent verification; candidate-to-OSM identity linkage, current operating status, ownership, opening hours, event availability, price, contact details, and willingness to collaborate remain unverified unless a candidate has matching OSM evidence (which itself does not establish those facts).
-- The no-entity seed path and per-seed provenance are live-tested only for the recorded brands and markets. Cross-seed affinity scores are not comparable and are not evidence of shared customers.
-- The Ordinary's own Qloo identity remains unresolved; the seed path is a fallback explicitly based on the supplied seeds.
-
-## Task 4 — critic, decision, experiment, outreach
-
-- Added a separate LangGraph analysis flow with critic, deterministic decision, experiment, and outreach nodes. `/analyze` emits server-sent JSON progress for completed discovery and analysis stages; only the final analysis event contains the complete output.
-- Rule-based criticisms cover single-source Qloo taste evidence, unresolved/ambiguous map verification, unverified Qloo/OSM linkage, user-supplied seed provenance, radius versus city boundaries, missing budget/logistics/availability evidence, unchecked brief constraints, baseline availability/strength, and outside-market/no-positive-signal cases.
-- The LLM receives only precomputed finding templates and exact citation allowlists, not candidate names or retrieved free text. Every returned finding must match the expected finding IDs and citations; wording with unsupported audience/customer/demographic claims or additional unsupported terms is rejected. The recorded live Nike critic text was rejected by validation; the The Ordinary critic call had no provider return a usable response. Both used rule-based criticism and decisions.
-- Deterministic rating rules are documented in [docs/decision-logic.md](docs/decision-logic.md). Provisional ratings are computed before critic deductions. Criticism severity causes a downgrade; ratings are not probabilities. If all candidates are `SKIP`, the overall result is `no candidate supported`. A higher-rated verified conventional baseline wins; ties favor the baseline conservatively. Experiments and outreach are generated only for candidates rated `WORTH TESTING` or `STRONG FIT`.
-- Live analysis used the saved real discovery responses for Nike/Portland and The Ordinary/New York (Sephora and Glossier seed inputs). All five candidates in each sample had provisional `WORTH TESTING` ratings. Nike/Portland finished with four `SKIP` ratings and SEPHORA retained `WORTH TESTING`; The Ordinary/New York finished with four `SKIP` ratings and Café Habana retained `WORTH TESTING`. Both overall results are `WORTH TESTING`; the selected candidates are SEPHORA and Café Habana respectively. Each run produced one experiment and one unsent outreach draft. No conventional baseline was available in either sample. Full outputs, including findings, citations, effects, and rating changes, are in [docs/live-samples/task-4-nike-portland-analysis.json](docs/live-samples/task-4-nike-portland-analysis.json) and [docs/live-samples/task-4-ordinary-new-york-seeds-analysis.json](docs/live-samples/task-4-ordinary-new-york-seeds-analysis.json).
-- The prompt-injection test exposed candidate-name text leaking into generated rationale. Deterministic rationale and experiment narrative now refer to “the selected candidate” / “the candidate” rather than embedding untrusted names; candidate names are not sent to the LLM critic.
-- No finding establishes that audience overlap exists. No outreach was sent. Seed-derived results remain explicitly distinct from evidence about The Ordinary itself.
-
-### Task 4 limitations / still unverified
-
-- The LLM critic's paraphrases are intentionally restrictive; the live Nike response introduced wording outside the evidence vocabulary and was rejected. The The Ordinary request did not receive a usable response. Rule-based criticisms worked in both cases; successful LLM-authored critic wording is not verified.
-- `STRONG FIT` requires verified Qloo-to-OSM linkage plus supported budget, logistics, and goal criteria. Those facts were not established in either live sample, so no candidate can currently reach that rating from these outputs.
-- These analyses reuse captured live discovery data; the critic/decision layer was run against those saved results. It does not verify that Qloo affinities predict commercial outcomes, event feasibility, or customer overlap.
-
-### Task 4 validation
-
-- `python -m pytest tests -q` — **50 passed in 11.25s**.
-- `python -m ruff check backend\app backend\scripts tests` — **All checks passed!**
-- `python -m ruff format --check backend\app backend\scripts tests` — **24 files already formatted**.
-- `python -m mypy --config-file backend\pyproject.toml backend tests` — **Success: no issues found in 25 source files**.
-- The suite includes synthetic fixture tests; these results do not represent live API verification.
+- None.
 
 ## Next
 
-- Task 4 complete. Do not start Task 5 until requested.
+- Task 5 has not started; wait for explicit request.

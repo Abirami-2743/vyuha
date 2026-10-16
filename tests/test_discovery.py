@@ -526,6 +526,59 @@ def test_different_brief_industry_changes_baseline_and_unexpected_roles() -> Non
     ]
 
 
+def test_osm_category_search_adds_up_to_three_explicit_non_qloo_baselines() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "nominatim.openstreetmap.org":
+            query = request.url.params["q"]
+            if query == "cosmetics shops in Springfield":
+                outside_city = nominatim_payload("Outside Cosmetics", 24, "cosmetics")[
+                    0
+                ]
+                outside_city["address"] = {"city": "Northampton"}
+                return httpx.Response(
+                    200,
+                    json=[
+                        *nominatim_payload("Local Cosmetics 1", 20, "cosmetics"),
+                        *nominatim_payload("Local Cosmetics 2", 21, "cosmetics"),
+                        *nominatim_payload("Local Cosmetics 3", 22, "cosmetics"),
+                        *nominatim_payload("Local Cosmetics 4", 23, "cosmetics"),
+                        outside_city,
+                    ],
+                )
+            if query.startswith("Fixture Cosmetics,"):
+                return httpx.Response(200, json=[])
+        return synthetic_response(request)
+
+    result = run(
+        run_pipeline(
+            {"brief": brief()},
+            nominatim_override=httpx.MockTransport(handle),
+        )
+    )
+
+    assert result.conventional_baseline is not None
+    baseline = result.conventional_baseline
+    assert baseline.candidate.name == "Local Cosmetics 1"
+    assert baseline.candidate.discovery_basis == "osm_category_baseline"
+    assert baseline.identity_verification.status == "verified"
+    assert baseline.identity_verification.location_relevance == "osm_category_verified"
+    assert any(
+        item.source_type == "external" and "OpenStreetMap lists" in item.claim
+        for item in baseline.identity_verification.evidence
+    )
+    assert "No Qloo taste query was run" in baseline.taste_affinity.rationale
+    assert "not a like-for-like" in baseline.taste_affinity.rationale
+    assert all(
+        item.candidate.discovery_basis == "osm_category_baseline"
+        for item in result.other_conventional_candidates
+    )
+    assert [item.candidate.name for item in result.other_conventional_candidates] == [
+        "Local Cosmetics 2",
+        "Local Cosmetics 3",
+    ]
+    assert len(result.candidate_checks) == 5
+
+
 def test_partial_candidate_verification_failure_is_not_hidden() -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         if request.url.params["q"].startswith("Fixture Cafe"):

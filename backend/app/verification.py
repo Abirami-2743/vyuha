@@ -75,6 +75,26 @@ class NominatimClient:
                 status_code=422,
             )
 
+        return await self._search(f"{clean_name}, {clean_market}")
+
+    async def search_category(self, category: str, market: str) -> list[OSMPlace]:
+        clean_category = category.strip()
+        clean_market = market.strip()
+        if (
+            not clean_category
+            or len(clean_category) > 160
+            or not clean_market
+            or len(clean_market) > 240
+        ):
+            raise VerificationError(
+                "verification_invalid_input",
+                "Industry and target market must be valid before place lookup.",
+                status_code=422,
+            )
+
+        return await self._search(f"{clean_category} shops in {clean_market}")
+
+    async def _search(self, query: str) -> list[OSMPlace]:
         async with self._request_lock:
             if self._last_request_at is not None:
                 elapsed = time.monotonic() - self._last_request_at
@@ -85,7 +105,7 @@ class NominatimClient:
                 response = await self._http.get(
                     NOMINATIM_SEARCH_URL,
                     params={
-                        "q": f"{clean_name}, {clean_market}",
+                        "q": query,
                         "format": "jsonv2",
                         "addressdetails": "1",
                         "limit": "5",

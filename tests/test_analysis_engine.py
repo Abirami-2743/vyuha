@@ -86,21 +86,26 @@ def _comparison(
     ] = "unexpected",
     location_relevance: Literal[
         "osm_same_city_unlinked",
+        "osm_category_verified",
         "qloo_same_city_unverified",
         "out_of_market",
         "unverified",
     ] = "osm_same_city_unlinked",
     linkage: Literal["verified", "unverified"] = "unverified",
     discovery_basis: Literal[
-        "business_brand", "user_supplied_seeds"
+        "business_brand", "user_supplied_seeds", "osm_category_baseline"
     ] = "business_brand",
     score: float | None = 0.7,
     seed_affinities: list[SeedAffinity] | None = None,
 ) -> CandidateComparison:
-    qloo = EvidenceItem(
-        source_type="qloo",
-        source_reference=f"/v2/insights?entity={entity_id}",
-        claim="Synthetic fixture: Qloo returned a result for the requested signal.",
+    qloo = (
+        EvidenceItem(
+            source_type="qloo",
+            source_reference=f"/v2/insights?entity={entity_id}",
+            claim="Synthetic fixture: Qloo returned a result for the requested signal.",
+        )
+        if discovery_basis != "osm_category_baseline"
+        else None
     )
     place = OSMPlace(
         osm_type="node",
@@ -124,7 +129,17 @@ def _comparison(
             if discovery_basis == "user_supplied_seeds"
             else [],
             seed_affinities=seed_affinities or [],
-            evidence=[qloo],
+            evidence=(
+                [qloo]
+                if qloo
+                else [
+                    EvidenceItem(
+                        source_type="unknown",
+                        source_reference="Vyuha OSM-only baseline search",
+                        claim="No Qloo taste query was run for this OSM-derived baseline.",
+                    )
+                ]
+            ),
         ),
         status=status,
         location_relevance=location_relevance,
@@ -148,7 +163,9 @@ def _comparison(
         else [],
     )
     partial = Criterion(
-        assessment="partial", rationale="Synthetic evidence only.", evidence=[qloo]
+        assessment="partial",
+        rationale="Synthetic evidence only.",
+        evidence=[qloo] if qloo else [],
     )
     supported = Criterion(
         assessment="supported", rationale="Fixture-only supported criterion."
@@ -386,6 +403,49 @@ def test_stronger_conventional_baseline_wins_over_unverified_candidate() -> None
     assert "conventional_baseline_stronger" in {
         item.code for item in unexpected_decision.criticisms
     }
+
+
+def test_osm_only_baseline_is_critiqued_and_skipped_without_relaxing_rules() -> None:
+    async def exercise() -> AnalysisResult:
+        engine, client = _engine()
+        baseline = _comparison(
+            "osm-baseline-a",
+            name="Local Cosmetics",
+            role="conventional_baseline",
+            location_relevance="osm_category_verified",
+            discovery_basis="osm_category_baseline",
+            score=None,
+        )
+        unexpected = _comparison("unexpected-a")
+        try:
+            return await engine.analyze(
+                _discovery([unexpected, baseline], baseline_id="osm-baseline-a"),
+                _brief(),
+            )
+        finally:
+            await client.aclose()
+
+    result = run(exercise())
+    baseline_decision = next(
+        item
+        for item in result.candidate_decisions
+        if item.candidate.candidate.entity_id == "osm-baseline-a"
+    )
+    assert baseline_decision.final_rating == "SKIP"
+    assert "positive Qloo taste signal" in baseline_decision.rationale
+    assert "not available" in baseline_decision.rationale
+    assert "no_positive_taste_signal" in {
+        item.code for item in baseline_decision.criticisms
+    }
+    assert "single_source_taste_signal" not in {
+        item.code for item in baseline_decision.criticisms
+    }
+    assert "cross_source_linkage_unverified" not in {
+        item.code for item in baseline_decision.criticisms
+    }
+    assert result.overall_decision.selected_entity_id == "unexpected-a"
+    assert len(result.experiments) == 1
+    assert len(result.outreach_drafts) == 1
 
 
 def test_invented_evidence_reference_rejects_all_llm_critic_text() -> None:

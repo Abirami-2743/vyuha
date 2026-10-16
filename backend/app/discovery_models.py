@@ -57,7 +57,9 @@ class BusinessIdentity(StrictModel):
     selected_osm_place: OSMPlace | None = None
     selected_qloo_entity: Candidate | None = None
     seed_resolutions: list[SeedResolution] = Field(default_factory=list, max_length=3)
-    discovery_basis: Literal["business_brand", "user_supplied_seeds"] | None = None
+    discovery_basis: (
+        Literal["business_brand", "user_supplied_seeds", "osm_category_baseline"] | None
+    ) = None
     cross_source_entity_linkage: Literal["unverified"] = "unverified"
     evidence: list[EvidenceItem] = Field(default_factory=list, max_length=20)
     limitations: list[str] = Field(default_factory=list, max_length=20)
@@ -69,6 +71,7 @@ class CandidateCheck(StrictModel):
     verification_message: str | None = Field(default=None, max_length=500)
     location_relevance: Literal[
         "osm_same_city_unlinked",
+        "osm_category_verified",
         "qloo_same_city_unverified",
         "out_of_market",
         "unverified",
@@ -126,7 +129,7 @@ class LocationQuery(StrictModel):
 class DiscoveryResult(StrictModel):
     status: Literal["complete", "partial", "empty", "needs_user_choice"]
     business_identity: BusinessIdentity
-    candidate_checks: list[CandidateCheck] = Field(default_factory=list, max_length=5)
+    candidate_checks: list[CandidateCheck] = Field(default_factory=list, max_length=8)
     unexpected_candidates: list[CandidateComparison] = Field(default_factory=list, max_length=5)
     conventional_baseline: CandidateComparison | None = None
     baseline_limitation: str | None = Field(default=None, max_length=1_000)

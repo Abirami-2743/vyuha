@@ -370,33 +370,46 @@ def _make_findings(
         verification_refs = [
             item.source_reference for item in check.evidence if item.source_type == "external"
         ]
-        if not qloo_refs:
+        has_qloo_evidence = bool(qloo_refs)
+        if not qloo_refs and candidate.discovery_basis != "osm_category_baseline":
             qloo_refs = [f"candidate:{identifier}:evidence"]
-        findings.append(
-            _finding(
-                identifier,
-                "single_source_taste_signal",
-                "The taste signal comes from Qloo and is not corroborated by an independent "
-                "audience source.",
-                "Keep the candidate tentative; do not treat the taste signal as proof of "
-                "commercial outcomes.",
-                "medium",
-                True,
-                qloo_refs,
-                candidate.evidence,
+        if qloo_refs:
+            findings.append(
+                _finding(
+                    identifier,
+                    "single_source_taste_signal",
+                    "The taste signal comes from Qloo and is not corroborated by an independent "
+                    "audience source.",
+                    "Keep the candidate tentative; do not treat the taste signal as proof of "
+                    "commercial outcomes.",
+                    "medium",
+                    True,
+                    qloo_refs,
+                    candidate.evidence,
+                )
             )
-        )
         if candidate.affinity_score is None and not candidate.seed_affinities:
+            no_signal_references = (
+                [item.source_reference for item in candidate.evidence]
+                if candidate.discovery_basis == "osm_category_baseline"
+                else [f"candidate:{identifier}:affinity_score"]
+            )
             findings.append(
                 _finding(
                     identifier,
                     "no_positive_taste_signal",
-                    "No numeric positive Qloo affinity value is available for this candidate.",
+                    (
+                        "No Qloo taste query or positive affinity signal is available for this "
+                        "OSM-derived conventional baseline."
+                        if candidate.discovery_basis == "osm_category_baseline"
+                        else "No numeric positive Qloo affinity value is available for this "
+                        "candidate."
+                    ),
                     "The deterministic decision rule assigns SKIP because no positive taste "
                     "signal is available.",
                     "high",
                     False,
-                    [f"candidate:{identifier}:affinity_score"],
+                    no_signal_references,
                     candidate.evidence,
                 )
             )
@@ -419,7 +432,7 @@ def _make_findings(
                     check.evidence,
                 )
             )
-        elif check.qloo_osm_entity_linkage == "unverified":
+        elif has_qloo_evidence and check.qloo_osm_entity_linkage == "unverified":
             findings.append(
                 _finding(
                     identifier,
@@ -452,7 +465,7 @@ def _make_findings(
                     candidate.evidence,
                 )
             )
-        if discovery.location_query is not None:
+        if discovery.location_query is not None and has_qloo_evidence:
             findings.append(
                 _finding(
                     identifier,
@@ -678,6 +691,12 @@ def _decision_rationale(
     brief: BusinessBrief,
 ) -> str:
     if final == provisional:
+        if provisional == "SKIP":
+            return (
+                "Provisional SKIP retained: required evidence, including a positive Qloo taste "
+                "signal, was not available. This is an evidence-based abstention, not a "
+                "commercial forecast."
+            )
         return (
             f"Provisional {provisional} retained: deterministic rules found a positive Qloo "
             "taste signal and same-market evidence sufficient only for a cautious test. "
@@ -804,7 +823,8 @@ def _make_outreach(decision: CandidateDecision, brief: BusinessBrief) -> Outreac
             "operations, availability, costs, permissions, or interest. Would you be the right "
             "person to confirm those details and discuss whether a small pilot could make "
             "sense?\n\n"
-            "Nothing has been scheduled or committed.\n\nThank you"
+            "Nothing has been scheduled or committed. This is an unsent draft; Vyuha has not "
+            "contacted anyone.\n\nThank you"
         ),
         channel="email",
         facts_not_verified=[

@@ -23,6 +23,9 @@ The rule critic checks:
 - The brief's constraints have not been checked against candidate evidence.
 - Whether a conventional baseline exists and, where supported, whether it has stronger evidence.
 - Whether the candidate is explicitly out of market or has no positive Qloo signal.
+- An OSM-only conventional baseline has no Qloo taste query, so it is explicitly not a
+  like-for-like affinity comparison. Its verified same-city OSM category evidence does not
+  substitute for taste evidence.
 
 The LLM receives only deterministic finding templates and their citations, not candidate names
 or retrieved free text. It may restate those findings, but cannot add findings or change severity.
@@ -66,6 +69,14 @@ If every candidate's final rating is `SKIP`, the overall result is `no candidate
 the highest rating, choose it as a conservative tie-break; this does not establish commercial
 superiority. A baseline with a higher final rating wins over a lower-rated unexpected candidate.
 Affinity values from separate seed queries are never combined or ranked against each other.
+
+In addition to verified same-industry Qloo candidates, discovery performs one user-triggered
+Nominatim category search and includes up to three results only when their returned OSM
+`category` or `type` exactly matches the brief's industry and their OSM address matches the
+requested city. These OSM-only candidates receive the same downstream comparison and critic
+rules, but have no Qloo affinity and therefore receive `SKIP` under rule 1. They cannot win or
+tie-break on absent taste evidence; this is an intentionally non-like-for-like reference point.
+If the search finds no matching local records, or the lookup fails, the limitation is explicit.
 
 ## Experiments and outreach
 

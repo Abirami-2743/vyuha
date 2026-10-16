@@ -836,6 +836,67 @@ class DiscoveryPipeline:
                         ],
                     )
                 )
+        industry = request.brief.industry
+        if industry:
+            try:
+                category_results = await self._verifier.search_category(industry, market)
+            except VerificationError as exc:
+                issues.append(
+                    "Could not search OpenStreetMap for the conventional baseline: "
+                    f"{exc.public_message}"
+                )
+            else:
+                existing_ids = {
+                    (place.osm_type, place.osm_id)
+                    for check in checks
+                    for place in check.place_matches
+                }
+                baseline_count = 0
+                for place in self._verifier.local_matches(market, category_results):
+                    if not self._matches_category(place, industry):
+                        continue
+                    identity = (place.osm_type, place.osm_id)
+                    if identity in existing_ids:
+                        continue
+                    existing_ids.add(identity)
+                    candidate = Candidate(
+                        entity_id=f"osm:{place.osm_type}/{place.osm_id}",
+                        name=place.name or place.display_name[:500],
+                        entity_type="urn:entity:place",
+                        subtype=place.type or place.category,
+                        discovery_basis="osm_category_baseline",
+                        evidence=[
+                            EvidenceItem(
+                                source_type="unknown",
+                                source_reference="Vyuha OSM-only baseline search",
+                                claim=(
+                                    "No Qloo taste query was run for this OSM-derived "
+                                    "conventional baseline."
+                                ),
+                            )
+                        ],
+                    )
+                    checks.append(
+                        CandidateCheck(
+                            candidate=candidate,
+                            status="verified",
+                            location_relevance="osm_category_verified",
+                            place_matches=[place],
+                            verified_identity=True,
+                            verified_location=True,
+                            evidence=[self._osm_evidence(place)],
+                            missing_evidence=[
+                                "Qloo taste affinity was not queried; this is not a "
+                                "like-for-like affinity comparison.",
+                                "Current operating status, event availability, prices, and "
+                                "willingness to collaborate.",
+                            ],
+                        )
+                    )
+                    baseline_count += 1
+                    if baseline_count == 3:
+                        break
+
         return {"candidate_checks": checks, "stage_issues": issues}
 
     async def _stage_d(self, state: _State) -> dict[str, object]:
@@ -863,21 +924,35 @@ class DiscoveryPipeline:
                 status=status,
                 business_identity=identity,
                 candidate_checks=checks,
+                baseline_limitation=(
+                    "No same-city OSM place matching the stated industry category/type was "
+                    "returned by the conventional-baseline search."
+                    if brief.industry
+                    else "No conventional baseline was assessed because the brief did not "
+                    "specify an industry."
+                ),
                 location_query=self._location_query(state),
                 limitations=issues
                 + [
                     "No independently identity- and location-verified local partner is available "
-                    "to compare.",
-                    "No conventional baseline is selected without a verified candidate that "
-                    "matches the user's stated industry/category.",
+                    "to compare."
                 ],
             )
             return {"result": result}
 
         interpretations: dict[str, _CandidateInterpretation] = {}
         try:
-            interpreted = await self._interpret(brief, checks)
-            allowed_ids = {check.candidate.entity_id for check in checks}
+            interpretation_checks = [
+                check
+                for check in checks
+                if any(item.source_type == "qloo" for item in check.candidate.evidence)
+            ]
+            interpreted = (
+                await self._interpret(brief, interpretation_checks)
+                if interpretation_checks
+                else _InterpretationResponse(candidates=[])
+            )
+            allowed_ids = {check.candidate.entity_id for check in interpretation_checks}
             if len(interpreted.candidates) != len(allowed_ids):
                 raise LLMError(
                     "llm_invalid_discovery_output",
@@ -956,8 +1031,9 @@ class DiscoveryPipeline:
             (item for item in comparisons if item.role == "conventional_baseline"), None
         )
         baseline_limitation = (
-            "No conventional baseline was found: no independently verified Qloo candidate "
-            "had an OSM category/type exactly matching the stated industry."
+            "No conventional baseline was found: no same-city OSM place matching the stated "
+            "industry category/type, and no "
+            "independently verified Qloo candidate matching that industry, was returned."
             if baseline is None and industry
             else (
                 "No conventional baseline was assessed because the brief did not "
@@ -979,6 +1055,11 @@ class DiscoveryPipeline:
         ]
         if baseline_limitation:
             limitations.append(baseline_limitation)
+        if baseline is not None and baseline.candidate.discovery_basis == "osm_category_baseline":
+            limitations.append(
+                "The conventional baseline comes from OSM category data and has no Qloo taste "
+                "evidence; it is not a like-for-like taste-affinity comparison."
+            )
         if not industry:
             limitations.append(
                 "The brief did not state an industry, so candidates cannot defensibly be "
@@ -990,7 +1071,10 @@ class DiscoveryPipeline:
                 "Some Qloo candidates could not be independently verified in the target market; "
                 "they are shown as checks, not recommended candidates."
             )
-        if len(interpretations) != len(checks):
+        qloo_check_count = sum(
+            any(item.source_type == "qloo" for item in check.candidate.evidence) for check in checks
+        )
+        if len(interpretations) != qloo_check_count:
             limitations.append(
                 "Some complementarity or goal-alignment interpretations are missing or partial; "
                 "unknowns remain unknown."
@@ -998,7 +1082,7 @@ class DiscoveryPipeline:
         result = DiscoveryResult(
             status=(
                 "complete"
-                if len(interpretations) == len(checks)
+                if len(interpretations) == qloo_check_count
                 and len(verified) == len(checks)
                 and not issues
                 else "partial"
@@ -1106,8 +1190,17 @@ class DiscoveryPipeline:
         elif score is None:
             taste_affinity = Criterion(
                 assessment="unknown",
-                rationale="Qloo returned no numeric affinity value for this result.",
-                evidence=qloo_evidence,
+                rationale=(
+                    "No Qloo taste query was run for this OSM-derived conventional baseline; "
+                    "taste affinity is unknown, so this is not a like-for-like comparison."
+                    if candidate.discovery_basis == "osm_category_baseline"
+                    else "Qloo returned no numeric affinity value for this result."
+                ),
+                evidence=(
+                    candidate.evidence
+                    if candidate.discovery_basis == "osm_category_baseline"
+                    else qloo_evidence
+                ),
             )
         else:
             taste_affinity = Criterion(
@@ -1206,7 +1299,12 @@ class DiscoveryPipeline:
                 or "the requested market"
             )
         if locality:
-            local_rationale = f"An exact-name OSM record was returned in {locality}."
+            local_rationale = (
+                f"OpenStreetMap returned a same-city place matching the requested industry "
+                f"category/type in {locality}."
+                if candidate.discovery_basis == "osm_category_baseline"
+                else f"An exact-name OSM record was returned in {locality}."
+            )
         elif check.location_relevance == "out_of_market":
             local_rationale = (
                 f"Qloo metadata places this entity in {candidate.qloo_city!r}, outside the "
@@ -1226,7 +1324,12 @@ class DiscoveryPipeline:
             f"{', '.join(candidate.source_seed_names)}; this is not evidence about the user's "
             "own brand or its customers. "
             if candidate.discovery_basis == "user_supplied_seeds"
-            else "Qloo returned this entity for the resolved business-brand seed. "
+            else (
+                "This conventional baseline was retrieved from OpenStreetMap category data; "
+                "it has no Qloo taste evidence and is not a like-for-like affinity comparison. "
+                if candidate.discovery_basis == "osm_category_baseline"
+                else "Qloo returned this entity for the resolved business-brand seed. "
+            )
         )
         return CandidateComparison(
             candidate=candidate,
@@ -1237,7 +1340,11 @@ class DiscoveryPipeline:
                     evidence_rationale
                     + "Taste affinity does not establish shared customers or commercial relevance."
                 ),
-                evidence=qloo_evidence,
+                evidence=(
+                    external_evidence
+                    if candidate.discovery_basis == "osm_category_baseline"
+                    else qloo_evidence
+                ),
             ),
             taste_affinity=taste_affinity,
             complementarity=complementarity,
@@ -1294,6 +1401,14 @@ class DiscoveryPipeline:
         )
 
     @staticmethod
+    def _matches_category(place: OSMPlace, industry: str) -> bool:
+        normalized_industry = normalize_text(industry)
+        return any(
+            value and normalize_text(value) == normalized_industry
+            for value in (place.category, place.type)
+        )
+
+    @staticmethod
     def _market_city(market: str) -> str:
         return market.split(",", maxsplit=1)[0].strip()
 
@@ -1339,6 +1454,10 @@ class DiscoveryPipeline:
         return DiscoveryResult(
             status=status,
             business_identity=identity,
+            baseline_limitation=(
+                "No conventional-baseline search was run because discovery requires an "
+                "identity/location choice or the Qloo seed is unavailable."
+            ),
             limitations=identity.limitations,
         )
 
