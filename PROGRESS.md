@@ -1,6 +1,6 @@
 # Vyuha progress — Task 3 of 7
 
-Updated: October 15, 2026
+Updated: October 16, 2026
 
 ## Done
 
@@ -47,7 +47,7 @@ Full captured JSON for all four endpoint responses (The Ordinary, Nike/Portland,
 
 ## Validation
 
-- `python -m pytest tests -q` — **38 passed**.
+- `python -m pytest tests -q` — **40 passed in 16.98s** (Task 3b final run).
 - `python -m ruff check backend\app backend\scripts tests` — **All checks passed**.
 - `python -m ruff format --check backend\app backend\scripts tests` — **21 files already formatted**.
 - `python -m mypy --config-file backend\pyproject.toml backend tests` — **Success: no issues found in 22 source files**.
@@ -70,6 +70,29 @@ Full captured JSON for all four endpoint responses (The Ordinary, Nike/Portland,
 - OSM coverage beyond the tested places; a missing listing is not proof the business does not exist.
 - Successful primary LLM structured output; previous Task 2 live checks observed primary rate limits and successful fallback.
 
+## Task 3b — local discovery and user-supplied seed fallback
+
+### Verified location behavior
+
+- Official Qloo Location Insights documentation describes custom geo-points and boundaries; the Place Insights parameter guide documents `filter.location` and `filter.location.radius`. See [Qloo Location Insights](https://docs.qloo.com/docs/insights-with-location) and [available parameters by entity type](https://github.com/qloo/docs-public/blob/main/reference/available-parameters-by-entity-type.md).
+- Live Nike/Portland and Nike/Barcelona checks using `filter.location=POINT(longitude latitude)` with `filter.location.radius=100` returned HTTP 200 and place entities whose Qloo geocode city matched the requested city (Portland and Barcelona respectively). The pipeline now sends the documented WKT point and radius using the selected business OSM coordinates.
+- A bare `latitude,longitude` value returned HTTP 400 (`WKT format is invalid and cannot be parsed`). Radius 10 and 25 mile queries returned HTTP 200 with no entities for the tested Nike seed/markets; radius 100 returned entities. `filter.address=Portland` is not a city filter: a live request returned a Manchester hotel on Portland Street. Name/region/country geocode filters returned empty results for the tested request.
+- A 100-mile radius does not define a city boundary. Qloo city metadata is treated as a Qloo-only location signal; the pipeline independently checks exact-name Nominatim/OSM matches and labels each result `osm_same_city_unlinked`, `qloo_same_city_unverified`, `out_of_market`, or `unverified`. Out-of-market candidates are listed separately, not presented as local recommendations.
+
+### Seed-brand path
+
+- When the business has no exact Qloo brand result, a request may include one to three user-supplied seed brands. Each seed is searched with `GET /search` and `types=urn:entity:brand`; exact unique results resolve, while non-exact or ambiguous results require explicit selection. If a seed needs a choice, discovery pauses and returns the options. Unresolved seeds are reported rather than replaced with invented entities.
+- Discovery runs Insights separately for each resolved seed. Candidate provenance states that results derive from user-supplied seeds, not the user's own brand or evidence about its customers. When a candidate occurs for multiple seeds, its per-seed affinity values remain separate; the combined `affinity_score` is omitted rather than treating cross-query values as comparable.
+- The live The Ordinary/New York run used Sephora and Glossier as user-supplied seeds after Qloo did not provide an exact business match. Both seeds resolved, and the result was marked `discovery_basis=user_supplied_seeds` and `status=partial`. This verifies the tested path, not that The Ordinary's customers like either seed.
+- Full captured responses are in [docs/live-samples/task-3b-nike-portland.json](docs/live-samples/task-3b-nike-portland.json) and [docs/live-samples/task-3b-ordinary-new-york-seeds.json](docs/live-samples/task-3b-ordinary-new-york-seeds.json). See [docs/live-samples/README.md](docs/live-samples/README.md) for capture context.
+
+### Still unverified / limitations
+
+- A 100-mile Qloo radius can extend outside city limits; whether the API applies additional geospatial interpretation beyond the tested geocodes is not established. Do not call radius-filtered candidates local without same-city evidence.
+- City metadata returned by Qloo is not independent verification; candidate-to-OSM identity linkage, current operating status, ownership, opening hours, event availability, price, contact details, and willingness to collaborate remain unverified unless a candidate has matching OSM evidence (which itself does not establish those facts).
+- The no-entity seed path and per-seed provenance are live-tested only for the recorded brands and markets. Cross-seed affinity scores are not comparable and are not evidence of shared customers.
+- The Ordinary's own Qloo identity remains unresolved; the seed path is a fallback explicitly based on the supplied seeds.
+
 ## Next
 
-- Finish the current live-result review; do not start Task 4 until requested.
+- Task 3b complete. Do not start Task 4 until requested.

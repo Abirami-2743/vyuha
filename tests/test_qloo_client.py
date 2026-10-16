@@ -77,6 +77,9 @@ def test_insights_request_and_affinity_parse_from_observed_response_shape() -> N
         assert request.url.path == "/v2/insights"
         assert request.url.params["filter.type"] == "urn:entity:place"
         assert request.url.params["signal.interests.entities"] == "test-brand-id"
+        assert request.url.params["filter.location"] == "POINT(-122.6771674 45.5189118)"
+        assert request.url.params["filter.location.radius"] == "100"
+        assert request.url.params["take"] == "20"
         assert request.headers["X-Api-Key"] == TEST_API_KEY
 
     async def exercise() -> None:
@@ -93,6 +96,7 @@ def test_insights_request_and_affinity_parse_from_observed_response_shape() -> N
                     entity_type="urn:entity:brand",
                 ),
                 "urn:entity:place",
+                location=(45.5189118, -122.6771674),
             )
         assert len(candidates) == 1
         assert candidates[0].name == "Fixture Place"
@@ -163,6 +167,7 @@ def test_malformed_insights_response_is_classified() -> None:
                         entity_type="urn:entity:brand",
                     ),
                     "urn:entity:place",
+                    location=(45.5189118, -122.6771674),
                 )
 
     run(exercise())

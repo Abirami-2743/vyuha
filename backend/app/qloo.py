@@ -128,6 +128,9 @@ class QlooClient:
         self,
         entity: ResolvedEntity,
         output_type: str,
+        *,
+        location: tuple[float, float],
+        radius_miles: float = 100,
     ) -> list[Candidate]:
         if not _ENTITY_TYPE_PATTERN.fullmatch(output_type):
             raise QlooError(
@@ -135,11 +138,29 @@ class QlooClient:
                 "The requested Qloo output type is invalid.",
                 status_code=422,
             )
+        latitude, longitude = location
+        if (
+            not math.isfinite(latitude)
+            or not math.isfinite(longitude)
+            or not -90 <= latitude <= 90
+            or not -180 <= longitude <= 180
+            or not math.isfinite(radius_miles)
+            or not 0 < radius_miles <= 100
+        ):
+            raise QlooError(
+                "qloo_invalid_input",
+                "A valid location and radius are required for local place discovery.",
+                status_code=422,
+            )
+        wkt_point = f"POINT({longitude:.7f} {latitude:.7f})"
         payload = await self._get_json(
             "/v2/insights",
             params={
                 "filter.type": output_type,
                 "signal.interests.entities": entity.entity_id,
+                "filter.location": wkt_point,
+                "filter.location.radius": str(radius_miles),
+                "take": "20",
             },
         )
         if payload is None:
@@ -153,7 +174,9 @@ class QlooClient:
 
         retrieved_at = datetime.now(timezone.utc)
         reference = (
-            f"/v2/insights?filter.type={output_type}&signal.interests.entities={entity.entity_id}"
+            f"/v2/insights?filter.type={output_type}"
+            f"&signal.interests.entities={entity.entity_id}"
+            f"&filter.location={wkt_point}&filter.location.radius={radius_miles:g}"
         )
         candidates: list[Candidate] = []
         for item in entities:
@@ -172,6 +195,22 @@ class QlooClient:
             if subtype is not None and not isinstance(subtype, str):
                 raise self._malformed_response()
             if subtype != output_type:
+                raise self._malformed_response()
+
+            properties = item.get("properties", {})
+            if not isinstance(properties, dict):
+                raise self._malformed_response()
+            geocode = properties.get("geocode")
+            if geocode is not None and not isinstance(geocode, dict):
+                raise self._malformed_response()
+            geocode = geocode or {}
+            qloo_city = geocode.get("city")
+            qloo_region = geocode.get("admin1_region")
+            qloo_country_code = geocode.get("country_code")
+            if any(
+                value is not None and not isinstance(value, str)
+                for value in (qloo_city, qloo_region, qloo_country_code)
+            ):
                 raise self._malformed_response()
 
             query = item.get("query")
@@ -197,6 +236,9 @@ class QlooClient:
                         entity_type=entity_type,
                         subtype=subtype,
                         affinity_score=affinity,
+                        qloo_city=qloo_city,
+                        qloo_region=qloo_region,
+                        qloo_country_code=qloo_country_code,
                         evidence=[
                             EvidenceItem(
                                 source_type="qloo",

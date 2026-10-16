@@ -109,7 +109,19 @@ class Candidate(StrictModel):
     subtype: str | None = Field(default=None, max_length=120)
     identity_match_label: Literal["not an exact match"] | None = None
     affinity_score: float | None = Field(default=None, allow_inf_nan=False)
+    qloo_city: str | None = Field(default=None, max_length=200)
+    qloo_region: str | None = Field(default=None, max_length=200)
+    qloo_country_code: str | None = Field(default=None, min_length=2, max_length=2)
+    discovery_basis: Literal["business_brand", "user_supplied_seeds"] = "business_brand"
+    source_seed_names: list[str] = Field(default_factory=list, max_length=3)
+    seed_affinities: list[SeedAffinity] = Field(default_factory=list, max_length=3)
     evidence: list[EvidenceItem] = Field(default_factory=list, max_length=50)
+
+
+class SeedAffinity(StrictModel):
+    seed_name: str = Field(min_length=1, max_length=160)
+    score: float = Field(allow_inf_nan=False)
+    source_reference: str = Field(min_length=1, max_length=2_000)
 
 
 class Criticism(StrictModel):

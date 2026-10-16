@@ -15,12 +15,15 @@ from .discovery_models import (
     Criterion,
     DiscoveryRequest,
     DiscoveryResult,
+    LocationQuery,
+    SeedBrandInput,
+    SeedResolution,
     _CandidateInterpretation,
     _InterpretationResponse,
 )
 from .errors import LLMError, QlooError, VerificationError
 from .llm import LLMClient
-from .models import BusinessBrief, Candidate, EvidenceItem, ResolvedEntity
+from .models import BusinessBrief, Candidate, EvidenceItem, ResolvedEntity, SeedAffinity
 from .qloo import QlooClient
 from .verification import NominatimClient, OSMPlace, normalize_text
 
@@ -33,7 +36,9 @@ _SEED_TYPE = "urn:entity:brand"
 class _State(TypedDict, total=False):
     request: DiscoveryRequest
     identity: BusinessIdentity
-    seed_entity: ResolvedEntity
+    seed_entities: list[tuple[str, ResolvedEntity]]
+    location_point: tuple[float, float]
+    location_radius_miles: float
     qloo_candidates: list[Candidate]
     candidate_checks: list[CandidateCheck]
     stage_issues: list[str]
@@ -186,7 +191,122 @@ class DiscoveryPipeline:
             if normalize_text(entity.name) == normalize_text(brief.business_name)
         ]
         selectable_qloo = exact_qloo or eligible_qloo
-        if not selectable_qloo:
+        selected_qloo = next(
+            (
+                entity
+                for entity in selectable_qloo
+                if entity.entity_id == request.selected_qloo_entity_id
+            ),
+            None,
+        )
+        if request.selected_qloo_entity_id is not None and selected_qloo is None:
+            identity = BusinessIdentity(
+                status="needs_user_choice",
+                osm_status="verified",
+                qloo_status="selection_invalid",
+                osm_options=[selected_osm],
+                qloo_options=[
+                    self._as_candidate(item, not_exact=not bool(exact_qloo))
+                    for item in selectable_qloo[:5]
+                ],
+                selected_osm_place=selected_osm,
+                evidence=[osm_evidence],
+                limitations=["The selected Qloo entity was not among this Search response."],
+            )
+            return {"identity": identity, "result": self._early_result(identity)}
+
+        if selected_qloo is None and len(exact_qloo) == 1:
+            selected_qloo = exact_qloo[0]
+        elif selected_qloo is None and exact_qloo:
+            identity = BusinessIdentity(
+                status="needs_user_choice",
+                osm_status="verified",
+                qloo_status="ambiguous",
+                osm_options=[selected_osm],
+                qloo_options=[self._as_candidate(item) for item in exact_qloo[:5]],
+                selected_osm_place=selected_osm,
+                evidence=[osm_evidence],
+                limitations=[
+                    "Qloo returned multiple exact-name brand entities; select one explicitly."
+                ],
+            )
+            return {"identity": identity, "result": self._early_result(identity)}
+
+        if selected_qloo is None and request.seed_brands:
+            resolutions, resolved_seeds = await self._resolve_seed_brands(request.seed_brands)
+            if any(item.status == "needs_user_choice" for item in resolutions):
+                identity = BusinessIdentity(
+                    status="needs_user_choice",
+                    osm_status="verified",
+                    qloo_status="not_found",
+                    osm_options=[selected_osm],
+                    qloo_options=[
+                        self._as_candidate(item, not_exact=True) for item in eligible_qloo[:5]
+                    ],
+                    selected_osm_place=selected_osm,
+                    seed_resolutions=resolutions,
+                    discovery_basis="user_supplied_seeds",
+                    evidence=[osm_evidence],
+                    limitations=[
+                        "Qloo returned no exact-name brand entity for the business. Choose a "
+                        "near-match explicitly or resolve each supplied seed before discovery."
+                    ],
+                )
+                return {"identity": identity, "result": self._early_result(identity)}
+
+            if not resolved_seeds:
+                identity = BusinessIdentity(
+                    status="not_found",
+                    osm_status="verified",
+                    qloo_status="not_found",
+                    osm_options=[selected_osm],
+                    qloo_options=[
+                        self._as_candidate(item, not_exact=True) for item in eligible_qloo[:5]
+                    ],
+                    selected_osm_place=selected_osm,
+                    seed_resolutions=resolutions,
+                    discovery_basis="user_supplied_seeds",
+                    evidence=[osm_evidence],
+                    limitations=[
+                        "Qloo did not resolve any supplied seed brand. No discovery was run."
+                    ],
+                )
+                return {"identity": identity, "result": self._early_result(identity)}
+
+            seed_evidence = [
+                self._seed_search_evidence(seed, entity) for seed, entity in resolved_seeds
+            ]
+            identity = BusinessIdentity(
+                status="partially_verified",
+                osm_status="verified",
+                qloo_status="not_found",
+                osm_options=[selected_osm],
+                qloo_options=[
+                    self._as_candidate(item, not_exact=True) for item in eligible_qloo[:5]
+                ],
+                selected_osm_place=selected_osm,
+                seed_resolutions=resolutions,
+                discovery_basis="user_supplied_seeds",
+                evidence=[osm_evidence, *seed_evidence],
+                limitations=[
+                    "Qloo did not resolve an exact brand entity for the user's business. "
+                    "Discovery below is derived from user-supplied seeds, not the user's own "
+                    "brand or proof that its customers like those seeds.",
+                    "Qloo and OSM provide no shared identifier, so cross-source entity linkage "
+                    "is unverified.",
+                ],
+            )
+            return {
+                "identity": identity,
+                "seed_entities": resolved_seeds,
+                "stage_issues": [
+                    f"{item.query} was not found in Qloo."
+                    for item in resolutions
+                    if item.status == "not_found"
+                ],
+            }
+
+        if selected_qloo is None and not selectable_qloo:
             identity = BusinessIdentity(
                 status="not_found",
                 osm_status="verified",
@@ -195,54 +315,13 @@ class DiscoveryPipeline:
                 selected_osm_place=selected_osm,
                 evidence=[osm_evidence],
                 limitations=[
-                    f"Qloo Search returned {len(qloo_results)} result(s), but all were excluded "
-                    f"because their returned entity types did not include {_SEED_TYPE!r}."
+                    f"Qloo Search returned {len(qloo_results)} result(s), but none was an "
+                    f"eligible {_SEED_TYPE!r} entity."
                 ],
             )
             return {"identity": identity, "result": self._early_result(identity)}
 
-        selected_qloo: ResolvedEntity | None = None
-        if request.selected_qloo_entity_id is not None:
-            selected_qloo = next(
-                (
-                    entity
-                    for entity in selectable_qloo
-                    if entity.entity_id == request.selected_qloo_entity_id
-                ),
-                None,
-            )
-            if selected_qloo is None:
-                identity = BusinessIdentity(
-                    status="needs_user_choice",
-                    osm_status="verified",
-                    qloo_status="selection_invalid",
-                    osm_options=[selected_osm],
-                    qloo_options=[
-                        self._as_candidate(item, not_exact=not bool(exact_qloo))
-                        for item in selectable_qloo[:20]
-                    ],
-                    selected_osm_place=selected_osm,
-                    evidence=[osm_evidence],
-                    limitations=["The selected Qloo entity was not among this Search response."],
-                )
-                return {"identity": identity, "result": self._early_result(identity)}
-        elif len(exact_qloo) == 1:
-            selected_qloo = exact_qloo[0]
-        elif exact_qloo:
-            identity = BusinessIdentity(
-                status="needs_user_choice",
-                osm_status="verified",
-                qloo_status="ambiguous",
-                osm_options=[selected_osm],
-                qloo_options=[self._as_candidate(item) for item in exact_qloo[:20]],
-                selected_osm_place=selected_osm,
-                evidence=[osm_evidence],
-                limitations=[
-                    "Qloo returned multiple exact-name brand entities; select one explicitly."
-                ],
-            )
-            return {"identity": identity, "result": self._early_result(identity)}
-        else:
+        if selected_qloo is None:
             identity = BusinessIdentity(
                 status="needs_user_choice",
                 osm_status="verified",
@@ -254,13 +333,19 @@ class DiscoveryPipeline:
                 selected_osm_place=selected_osm,
                 evidence=[osm_evidence],
                 limitations=[
-                    "Qloo returned no exact-name brand entity. These results are explicitly "
-                    "labeled 'not an exact match'; select one explicitly before discovery. "
+                    "Qloo returned no exact-name brand entity. These results are labeled "
+                    "'not an exact match'; select one explicitly or provide seed brands. "
                     "Results whose returned types exclude the requested brand type are omitted."
                 ],
             )
             return {"identity": identity, "result": self._early_result(identity)}
 
+        qloo_name_is_exact = normalize_text(selected_qloo.name) == normalize_text(
+            brief.business_name
+        )
+        selected_qloo_candidate = self._as_candidate(
+            selected_qloo, not_exact=not qloo_name_is_exact
+        )
         qloo_evidence = EvidenceItem(
             source_type="qloo",
             source_reference="/search?types=urn:entity:brand",
@@ -268,17 +353,10 @@ class DiscoveryPipeline:
                 f"Qloo Search returned {selected_qloo.name!r} as a brand entity; "
                 + (
                     "the user explicitly selected it despite a non-exact name match."
-                    if normalize_text(selected_qloo.name) != normalize_text(brief.business_name)
+                    if not qloo_name_is_exact
                     else "its name exactly matches the supplied business name."
                 )
             ),
-        )
-        selected_qloo_candidate = self._as_candidate(
-            selected_qloo,
-            not_exact=normalize_text(selected_qloo.name) != normalize_text(brief.business_name),
-        )
-        qloo_name_is_exact = normalize_text(selected_qloo.name) == normalize_text(
-            brief.business_name
         )
         identity = BusinessIdentity(
             status="verified" if qloo_name_is_exact else "partially_verified",
@@ -288,6 +366,7 @@ class DiscoveryPipeline:
             qloo_options=[selected_qloo_candidate],
             selected_osm_place=selected_osm,
             selected_qloo_entity=selected_qloo_candidate,
+            discovery_basis="business_brand",
             evidence=[osm_evidence, qloo_evidence],
             limitations=[
                 *(
@@ -304,45 +383,254 @@ class DiscoveryPipeline:
                 "no shared identifier, so cross-source entity linkage is unverified.",
             ],
         )
-        return {"identity": identity, "seed_entity": selected_qloo}
+        return {
+            "identity": identity,
+            "seed_entities": [(brief.business_name, selected_qloo)],
+        }
+
+    async def _resolve_seed_brands(
+        self,
+        inputs: list[SeedBrandInput],
+    ) -> tuple[list[SeedResolution], list[tuple[str, ResolvedEntity]]]:
+        resolutions: list[SeedResolution] = []
+        resolved: list[tuple[str, ResolvedEntity]] = []
+        if self._qloo is None:
+            return (
+                [SeedResolution(query=item.name, status="not_found") for item in inputs],
+                resolved,
+            )
+
+        for seed_input in inputs:
+            entities = await self._qloo.search_entities(seed_input.name, _SEED_TYPE)
+            eligible = [
+                entity
+                for entity in entities
+                if not entity.entity_types or _SEED_TYPE in entity.entity_types
+            ]
+            exact = [
+                entity
+                for entity in eligible
+                if normalize_text(entity.name) == normalize_text(seed_input.name)
+            ]
+            options = exact or eligible
+            selected = next(
+                (entity for entity in options if entity.entity_id == seed_input.selected_entity_id),
+                None,
+            )
+            if seed_input.selected_entity_id is not None and selected is None:
+                resolutions.append(
+                    SeedResolution(
+                        query=seed_input.name,
+                        status="needs_user_choice",
+                        options=[
+                            self._seed_candidate(
+                                entity,
+                                seed_input.name,
+                                not_exact=not bool(exact),
+                            )
+                            for entity in options[:5]
+                        ],
+                    )
+                )
+                continue
+            if selected is None and len(exact) == 1:
+                selected = exact[0]
+            elif selected is None and options:
+                resolutions.append(
+                    SeedResolution(
+                        query=seed_input.name,
+                        status="needs_user_choice",
+                        options=[
+                            self._seed_candidate(
+                                entity,
+                                seed_input.name,
+                                not_exact=not bool(exact),
+                            )
+                            for entity in options[:5]
+                        ],
+                    )
+                )
+                continue
+            if selected is None:
+                resolutions.append(SeedResolution(query=seed_input.name, status="not_found"))
+                continue
+            selected_candidate = self._seed_candidate(
+                selected,
+                seed_input.name,
+                not_exact=normalize_text(selected.name) != normalize_text(seed_input.name),
+            )
+            resolutions.append(
+                SeedResolution(
+                    query=seed_input.name,
+                    status="resolved",
+                    options=[selected_candidate],
+                    selected_entity=selected_candidate,
+                )
+            )
+            resolved.append((seed_input.name, selected))
+        return resolutions, resolved
+
+    @classmethod
+    def _seed_candidate(
+        cls,
+        entity: ResolvedEntity,
+        seed_name: str,
+        *,
+        not_exact: bool,
+    ) -> Candidate:
+        candidate = cls._as_candidate(entity, not_exact=not_exact)
+        return candidate.model_copy(
+            update={
+                "discovery_basis": "user_supplied_seeds",
+                "source_seed_names": [seed_name],
+                "evidence": [
+                    cls._seed_search_evidence(seed_name, entity),
+                ],
+            }
+        )
+
+    @staticmethod
+    def _seed_search_evidence(seed_name: str, entity: ResolvedEntity) -> EvidenceItem:
+        return EvidenceItem(
+            source_type="qloo",
+            source_reference="/search?types=urn:entity:brand",
+            claim=(
+                f"Qloo Search resolved user-supplied seed {seed_name!r} to "
+                f"{entity.name!r}; this does not establish that the user's customers "
+                "like this seed."
+            ),
+        )
 
     async def _stage_b(self, state: _State) -> dict[str, object]:
         identity = state["identity"]
-        seed = state["seed_entity"]
-        issues: list[str] = []
+        seeds = state["seed_entities"]
+        place = identity.selected_osm_place
+        if place is None or place.lat is None or place.lon is None:
+            return {
+                "qloo_candidates": [],
+                "stage_issues": [
+                    *state.get("stage_issues", []),
+                    "The selected OSM business record has no coordinates; local Qloo "
+                    "Insights could not be run.",
+                ],
+            }
         try:
-            returned = (
-                await self._qloo.get_cross_category_candidates(seed, _OUTPUT_TYPE)
-                if self._qloo is not None
-                else []
-            )
-        except QlooError as exc:
-            issues.append(f"Qloo discovery failed: {exc.public_message}")
-            return {"qloo_candidates": [], "stage_issues": issues}
+            location = (float(place.lat), float(place.lon))
+        except ValueError:
+            return {
+                "qloo_candidates": [],
+                "stage_issues": [
+                    *state.get("stage_issues", []),
+                    "The selected OSM coordinates were invalid; local Qloo Insights "
+                    "could not be run.",
+                ],
+            }
 
-        candidates: list[Candidate] = []
+        issues = list(state.get("stage_issues", []))
+        candidates_by_seed: list[list[Candidate]] = []
         skipped_low = 0
         skipped_unknown = 0
-        for candidate in returned:
-            candidate_name = normalize_text(candidate.name)
-            if candidate.entity_id == seed.entity_id or candidate_name in {
-                normalize_text(seed.name),
-                normalize_text(state["request"].brief.business_name),
-            }:
+        for seed_name, seed_entity in seeds:
+            try:
+                returned = (
+                    await self._qloo.get_cross_category_candidates(
+                        seed_entity,
+                        _OUTPUT_TYPE,
+                        location=location,
+                        radius_miles=100,
+                    )
+                    if self._qloo is not None
+                    else []
+                )
+            except QlooError as exc:
+                issues.append(f"Qloo discovery failed for seed {seed_name!r}: {exc.public_message}")
+                candidates_by_seed.append([])
                 continue
-            if candidate.affinity_score is None:
-                skipped_unknown += 1
-                continue
-            if candidate.affinity_score <= 0:
-                skipped_low += 1
-                continue
-            candidates.append(candidate)
-        if not returned:
-            issues.append("Qloo returned no place entities for this seed.")
-        if returned and not candidates:
+
+            seed_candidates: list[Candidate] = []
+            for candidate in returned:
+                candidate_name = normalize_text(candidate.name)
+                if candidate.entity_id == seed_entity.entity_id or candidate_name in {
+                    normalize_text(seed_entity.name),
+                    normalize_text(state["request"].brief.business_name),
+                }:
+                    continue
+                score = candidate.affinity_score
+                if score is None:
+                    skipped_unknown += 1
+                    continue
+                if score <= 0:
+                    skipped_low += 1
+                    continue
+                if identity.discovery_basis == "user_supplied_seeds":
+                    evidence = [
+                        item.model_copy(
+                            update={
+                                "claim": (
+                                    f"Qloo returned {candidate.name!r} for user-supplied seed "
+                                    f"{seed_name!r}; this result is derived from that seed, "
+                                    "not from the user's own brand."
+                                )
+                            }
+                        )
+                        for item in candidate.evidence
+                    ]
+                    reference = evidence[0].source_reference if evidence else ""
+                    seed_affinities = (
+                        [
+                            SeedAffinity(
+                                seed_name=seed_name,
+                                score=score,
+                                source_reference=reference,
+                            )
+                        ]
+                        if reference
+                        else []
+                    )
+                    candidate = candidate.model_copy(
+                        update={
+                            "discovery_basis": "user_supplied_seeds",
+                            "source_seed_names": [seed_name],
+                            "seed_affinities": seed_affinities,
+                            "evidence": evidence,
+                        }
+                    )
+                seed_candidates.append(candidate)
+            if not returned:
+                issues.append(f"Qloo returned no place entities for seed {seed_name!r}.")
+            candidates_by_seed.append(seed_candidates)
+
+        merged: dict[str, Candidate] = {}
+        for rank in range(max((len(items) for items in candidates_by_seed), default=0)):
+            for seed_candidates in candidates_by_seed:
+                if rank >= len(seed_candidates):
+                    continue
+                candidate = seed_candidates[rank]
+                previous = merged.get(candidate.entity_id)
+                if previous is None:
+                    merged[candidate.entity_id] = candidate
+                    continue
+                seed_names = list(
+                    dict.fromkeys(previous.source_seed_names + candidate.source_seed_names)
+                )
+                affinities = previous.seed_affinities + [
+                    item
+                    for item in candidate.seed_affinities
+                    if item.seed_name not in {old.seed_name for old in previous.seed_affinities}
+                ]
+                merged[candidate.entity_id] = previous.model_copy(
+                    update={
+                        "source_seed_names": seed_names,
+                        "seed_affinities": affinities,
+                        "affinity_score": None if len(seed_names) > 1 else previous.affinity_score,
+                        "evidence": previous.evidence + candidate.evidence,
+                    }
+                )
+
+        candidates = list(merged.values())[:_MAX_CANDIDATES_TO_VERIFY]
+        if not candidates and not issues:
             issues.append(
-                "Qloo returned no candidates with a positive numeric affinity; "
-                "unknown or non-positive scores were not promoted."
+                "Qloo returned no usable local place candidates for the resolved seed(s)."
             )
         if skipped_low:
             issues.append(f"Excluded {skipped_low} Qloo result(s) with non-positive affinity.")
@@ -350,7 +638,9 @@ class DiscoveryPipeline:
             issues.append(f"Excluded {skipped_unknown} Qloo result(s) without a numeric affinity.")
         return {
             "identity": identity,
-            "qloo_candidates": candidates[:_MAX_CANDIDATES_TO_VERIFY],
+            "location_point": location,
+            "location_radius_miles": 100.0,
+            "qloo_candidates": candidates,
             "stage_issues": issues,
         }
 
@@ -373,6 +663,7 @@ class DiscoveryPipeline:
                         candidate=candidate,
                         status="unavailable",
                         verification_message=exc.public_message,
+                        location_relevance="unverified",
                         missing_evidence=[
                             "No independent place response was available.",
                             "Location, operating status, event feasibility, and contact details "
@@ -386,10 +677,14 @@ class DiscoveryPipeline:
             local = self._verifier.local_matches(market, exact)
             if len(local) == 1:
                 place = local[0]
+                candidate = candidate.model_copy(
+                    update={"location_relevance": "osm_same_city_unlinked"}
+                )
                 checks.append(
                     CandidateCheck(
                         candidate=candidate,
                         status="verified",
+                        location_relevance="osm_same_city_unlinked",
                         place_matches=local,
                         verified_identity=True,
                         verified_location=True,
@@ -403,10 +698,14 @@ class DiscoveryPipeline:
                     )
                 )
             elif len(local) > 1:
+                candidate = candidate.model_copy(
+                    update={"location_relevance": "osm_same_city_unlinked"}
+                )
                 checks.append(
                     CandidateCheck(
                         candidate=candidate,
                         status="ambiguous",
+                        location_relevance="osm_same_city_unlinked",
                         place_matches=local,
                         verified_identity=True,
                         verified_location=True,
@@ -419,11 +718,23 @@ class DiscoveryPipeline:
                     )
                 )
             else:
+                requested_city = self._market_city(market)
+                qloo_city = candidate.qloo_city
+                if qloo_city and normalize_text(qloo_city) == normalize_text(requested_city):
+                    location_relevance: Literal[
+                        "qloo_same_city_unverified", "out_of_market", "unverified"
+                    ] = "qloo_same_city_unverified"
+                elif qloo_city:
+                    location_relevance = "out_of_market"
+                else:
+                    location_relevance = "unverified"
+                candidate = candidate.model_copy(update={"location_relevance": location_relevance})
                 checks.append(
                     CandidateCheck(
                         candidate=candidate,
                         status="unverified",
                         verification_message="unverified: no matching OSM listing found",
+                        location_relevance=location_relevance,
                         place_matches=exact,
                         verified_identity=False,
                         verified_location=False,
@@ -448,7 +759,11 @@ class DiscoveryPipeline:
         if not checks:
             status: Literal["partial", "empty"] = (
                 "empty"
-                if any("returned no place entities" in issue for issue in issues)
+                if any(
+                    "returned no place entities" in issue
+                    or "no usable local place candidates" in issue
+                    for issue in issues
+                )
                 else "partial"
             )
             if not checks and not issues:
@@ -458,6 +773,7 @@ class DiscoveryPipeline:
                 status=status,
                 business_identity=identity,
                 candidate_checks=checks,
+                location_query=self._location_query(state),
                 limitations=issues
                 + [
                     "No independently identity- and location-verified local partner is available "
@@ -518,10 +834,16 @@ class DiscoveryPipeline:
         comparisons: list[CandidateComparison] = []
         for check in checks:
             role: Literal[
-                "unexpected", "conventional_baseline", "other_conventional", "unclassified"
+                "unexpected",
+                "conventional_baseline",
+                "other_conventional",
+                "unclassified",
+                "out_of_market",
             ]
             if not industry:
                 role = "unclassified"
+            elif check.location_relevance == "out_of_market":
+                role = "out_of_market"
             elif check.status != "verified":
                 role = "unexpected"
             elif check in same_category:
@@ -539,6 +861,7 @@ class DiscoveryPipeline:
         unexpected = [item for item in comparisons if item.role == "unexpected"]
         other_conventional = [item for item in comparisons if item.role == "other_conventional"]
         unclassified = [item for item in comparisons if item.role == "unclassified"]
+        out_of_market = [item for item in comparisons if item.role == "out_of_market"]
         baseline = next(
             (item for item in comparisons if item.role == "conventional_baseline"), None
         )
@@ -595,6 +918,8 @@ class DiscoveryPipeline:
             unexpected_candidates=unexpected,
             conventional_baseline=baseline,
             baseline_limitation=baseline_limitation,
+            out_of_market_candidates=out_of_market,
+            location_query=self._location_query(state),
             other_conventional_candidates=other_conventional,
             unclassified_candidates=unclassified,
             limitations=limitations,
@@ -614,6 +939,15 @@ class DiscoveryPipeline:
                     "entity_id": check.candidate.entity_id,
                     "name": check.candidate.name,
                     "qloo_affinity": check.candidate.affinity_score,
+                    "seed_affinities": [
+                        {
+                            "seed_name": item.seed_name,
+                            "score": item.score,
+                        }
+                        for item in check.candidate.seed_affinities
+                    ],
+                    "qloo_city": check.candidate.qloo_city,
+                    "location_relevance": check.location_relevance,
                     "verification_status": check.status,
                     "verification_message": check.verification_message,
                     "missing_evidence": check.missing_evidence,
@@ -635,6 +969,9 @@ class DiscoveryPipeline:
             "Do not claim customer overlap, operating status, prices, contacts, attendance, or "
             "event feasibility. Treat verification_status and missing_evidence as material "
             "uncertainties; a candidate without a matching OSM listing is not verified. "
+            "Do not describe a candidate as local unless its location_relevance is "
+            "osm_same_city_unlinked or qloo_same_city_unverified; the latter is not independent "
+            "verification. "
             "Do not add facts. Cite only exact evidence_references provided for that candidate. "
             "State uncertainty explicitly. Return one candidate entry for every "
             "input entity_id.\nINPUT_JSON:\n"
@@ -648,7 +985,13 @@ class DiscoveryPipeline:
     def _comparison(
         self,
         check: CandidateCheck,
-        role: Literal["unexpected", "conventional_baseline", "other_conventional", "unclassified"],
+        role: Literal[
+            "unexpected",
+            "conventional_baseline",
+            "other_conventional",
+            "unclassified",
+            "out_of_market",
+        ],
         interpretation: _CandidateInterpretation | None,
         industry: str,
     ) -> CandidateComparison:
@@ -657,7 +1000,20 @@ class DiscoveryPipeline:
         external_evidence = check.evidence
         all_evidence = qloo_evidence + external_evidence
         score = candidate.affinity_score
-        if score is None:
+        if candidate.seed_affinities:
+            signals = "; ".join(
+                f"{item.seed_name}: {item.score:g}" for item in candidate.seed_affinities
+            )
+            taste_affinity = Criterion(
+                assessment="partial",
+                rationale=(
+                    f"Seed-specific Qloo affinity signal(s): {signals}. These are derived from "
+                    "user-supplied seeds, not the user's own business; values from separate "
+                    "queries are not treated as comparable."
+                ),
+                evidence=qloo_evidence,
+            )
+        elif score is None:
             taste_affinity = Criterion(
                 assessment="unknown",
                 rationale="Qloo returned no numeric affinity value for this result.",
@@ -759,10 +1115,28 @@ class DiscoveryPipeline:
                 or match.address.get("village")
                 or "the requested market"
             )
-        local_rationale = (
-            f"An exact-name OSM record was returned in {locality}."
-            if locality
-            else check.verification_message or "No exact-name local OSM record is available."
+        if locality:
+            local_rationale = f"An exact-name OSM record was returned in {locality}."
+        elif check.location_relevance == "out_of_market":
+            local_rationale = (
+                f"Qloo metadata places this entity in {candidate.qloo_city!r}, outside the "
+                "requested market. It is not presented as a local partner."
+            )
+        elif check.location_relevance == "qloo_same_city_unverified":
+            local_rationale = (
+                f"Qloo metadata reports {candidate.qloo_city!r} as the city, but no exact-name "
+                "local OSM listing verified the candidate."
+            )
+        else:
+            local_rationale = check.verification_message or (
+                "Location relevance is unverified; no exact-name local OSM record is available."
+            )
+        evidence_rationale = (
+            "Qloo returned this entity for user-supplied seed(s) "
+            f"{', '.join(candidate.source_seed_names)}; this is not evidence about the user's "
+            "own brand or its customers. "
+            if candidate.discovery_basis == "user_supplied_seeds"
+            else "Qloo returned this entity for the resolved business-brand seed. "
         )
         return CandidateComparison(
             candidate=candidate,
@@ -770,8 +1144,8 @@ class DiscoveryPipeline:
             evidence_relevance=Criterion(
                 assessment="partial",
                 rationale=(
-                    "Qloo returned this entity for the resolved seed. Taste affinity does not "
-                    "establish shared customers or commercial relevance."
+                    evidence_rationale
+                    + "Taste affinity does not establish shared customers or commercial relevance."
                 ),
                 evidence=qloo_evidence,
             ),
@@ -782,7 +1156,9 @@ class DiscoveryPipeline:
                 assessment="partial" if match else "unknown",
                 rationale=(
                     local_rationale
-                    + " Listing presence does not confirm current operation, event availability, "
+                    + " Location relevance label: "
+                    + check.location_relevance
+                    + ". Listing presence does not confirm current operation, event availability, "
                     "permits, accessibility, or logistical feasibility."
                 ),
                 evidence=external_evidence,
@@ -828,6 +1204,25 @@ class DiscoveryPipeline:
         )
 
     @staticmethod
+    def _market_city(market: str) -> str:
+        return market.split(",", maxsplit=1)[0].strip()
+
+    @staticmethod
+    def _location_query(state: _State) -> LocationQuery | None:
+        point = state.get("location_point")
+        identity = state.get("identity")
+        place = identity.selected_osm_place if identity else None
+        radius = state.get("location_radius_miles")
+        if point is None or place is None or radius is None:
+            return None
+        latitude, longitude = point
+        return LocationQuery(
+            point_wkt=f"POINT({longitude:.7f} {latitude:.7f})",
+            radius_miles=radius,
+            source_reference=place.source_reference,
+        )
+
+    @staticmethod
     def _osm_evidence(place: OSMPlace) -> EvidenceItem:
         return EvidenceItem(
             source_type="external",
@@ -859,4 +1254,4 @@ class DiscoveryPipeline:
 
     @staticmethod
     def _after_identity(state: _State) -> Literal["continue", "finish"]:
-        return "continue" if "seed_entity" in state else "finish"
+        return "continue" if "seed_entities" in state else "finish"

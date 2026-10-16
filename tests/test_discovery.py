@@ -110,16 +110,26 @@ async def run_pipeline(
     *,
     nominatim_override: Any = None,
     qloo_search_override: Mapping[str, object] | None = None,
+    qloo_search_overrides: Mapping[str, Mapping[str, object]] | None = None,
+    qloo_insights_override: Mapping[str, object] | None = None,
 ) -> Any:
     settings = make_settings()
 
     def qloo_response(request: httpx.Request) -> httpx.Response:
-        if (
-            qloo_search_override is not None
-            and request.url.host == "hackathon.api.qloo.com"
-            and request.url.path == "/search"
-        ):
-            return httpx.Response(200, json=qloo_search_override)
+        if request.url.host == "hackathon.api.qloo.com":
+            if request.url.path == "/search":
+                per_query = (qloo_search_overrides or {}).get(
+                    request.url.params["query"]
+                )
+                if per_query is not None:
+                    return httpx.Response(200, json=per_query)
+                if qloo_search_override is not None:
+                    return httpx.Response(200, json=qloo_search_override)
+            elif (
+                request.url.path == "/v2/insights"
+                and qloo_insights_override is not None
+            ):
+                return httpx.Response(200, json=qloo_insights_override)
         return synthetic_response(request)
 
     qloo = QlooClient(settings, transport=httpx.MockTransport(qloo_response))
@@ -357,6 +367,118 @@ def test_unverified_qloo_candidates_remain_in_comparisons_without_baseline() -> 
     assert result.conventional_baseline is None
     assert result.baseline_limitation is not None
     assert "No conventional baseline was found" in result.baseline_limitation
+
+
+def test_location_filter_and_qloo_city_are_not_treated_as_city_boundary() -> None:
+    insights = {
+        "results": {
+            "entities": [
+                {
+                    "entity_id": "fixture-cafe-id",
+                    "name": "Fixture Cafe",
+                    "type": "urn:entity",
+                    "subtype": "urn:entity:place",
+                    "query": {"affinity": 0.61},
+                    "properties": {"geocode": {"city": "Springfield"}},
+                },
+                {
+                    "entity_id": "fixture-cosmetics-id",
+                    "name": "Fixture Cosmetics",
+                    "type": "urn:entity",
+                    "subtype": "urn:entity:place",
+                    "query": {"affinity": 0.42},
+                    "properties": {"geocode": {"city": "Boston"}},
+                },
+            ]
+        }
+    }
+
+    def no_candidate_listings(request: httpx.Request) -> httpx.Response:
+        query = request.url.params["q"].split(",", maxsplit=1)[0]
+        if query in {"Fixture Cafe", "Fixture Cosmetics"}:
+            return httpx.Response(200, json=[])
+        return synthetic_response(request)
+
+    seen_location: list[str] = []
+
+    async def exercise() -> Any:
+        settings = make_settings()
+
+        def qloo_response(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/v2/insights":
+                seen_location.append(request.url.params["filter.location"])
+                assert request.url.params["filter.location.radius"] == "100"
+                assert request.url.params["take"] == "20"
+                return httpx.Response(200, json=insights)
+            return synthetic_response(request)
+
+        qloo = QlooClient(settings, transport=httpx.MockTransport(qloo_response))
+        verifier = NominatimClient(
+            transport=httpx.MockTransport(no_candidate_listings), sleep=no_sleep
+        )
+        llm = LLMClient(
+            settings, transport=httpx.MockTransport(synthetic_response), sleep=no_sleep
+        )
+        try:
+            return await DiscoveryPipeline(qloo, verifier, llm).run(
+                DiscoveryRequest.model_validate({"brief": brief()})
+            )
+        finally:
+            await qloo.aclose()
+            await verifier.aclose()
+            await llm.aclose()
+
+    result = run(exercise())
+    assert seen_location == ["POINT(-72.5000000 42.1000000)"]
+    checks = {check.candidate.name: check for check in result.candidate_checks}
+    assert checks["Fixture Cafe"].location_relevance == "qloo_same_city_unverified"
+    assert checks["Fixture Cosmetics"].location_relevance == "out_of_market"
+    assert all(check.status == "unverified" for check in checks.values())
+
+
+def test_seed_discovery_uses_user_supplied_brands_and_keeps_affinities_separate() -> (
+    None
+):
+    empty_search: dict[str, object] = {"results": []}
+    seed_searches = {
+        "Fixture Skin": empty_search,
+        "Seed Alpha": qloo_search_payload("Seed Alpha"),
+        "Seed Beta": qloo_search_payload("Seed Beta"),
+    }
+    result = run(
+        run_pipeline(
+            {
+                "brief": brief(),
+                "seed_brands": [
+                    {"name": "Seed Alpha"},
+                    {"name": "Seed Beta"},
+                ],
+            },
+            qloo_search_overrides=seed_searches,
+        )
+    )
+
+    assert result.business_identity.qloo_status == "not_found"
+    assert result.business_identity.discovery_basis == "user_supplied_seeds"
+    assert [item.status for item in result.business_identity.seed_resolutions] == [
+        "resolved",
+        "resolved",
+    ]
+    cafe = next(
+        check.candidate
+        for check in result.candidate_checks
+        if check.candidate.entity_id == "fixture-cafe-id"
+    )
+    assert cafe.discovery_basis == "user_supplied_seeds"
+    assert set(cafe.source_seed_names) == {"Seed Alpha", "Seed Beta"}
+    assert cafe.affinity_score is None
+    assert {item.seed_name for item in cafe.seed_affinities} == {
+        "Seed Alpha",
+        "Seed Beta",
+    }
+    assert all(
+        "not from the user's own brand" in evidence.claim for evidence in cafe.evidence
+    )
 
 
 def test_pipeline_filters_competitors_scores_and_preserves_provenance() -> None:
