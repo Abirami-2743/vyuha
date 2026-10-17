@@ -3,7 +3,8 @@ import type { Evidence, Provenance } from "@/lib/contracts";
 const provenanceLabels: Record<Provenance, string> = {
   qloo: "Qloo",
   external: "External",
-  ai_interpretation: "AI",
+  ai_interpretation: "AI interpretation",
+  rule_based: "Rule-based",
   unknown: "Unknown",
 };
 
@@ -11,6 +12,7 @@ const provenanceStyles: Record<Provenance, string> = {
   qloo: "border-emerald-800/20 bg-emerald-50 text-emerald-900",
   external: "border-sky-800/20 bg-sky-50 text-sky-900",
   ai_interpretation: "border-violet-800/20 bg-violet-50 text-violet-900",
+  rule_based: "border-slate-500/20 bg-slate-100 text-slate-800",
   unknown: "border-slate-500/20 bg-slate-100 text-slate-700",
 };
 

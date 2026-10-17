@@ -1,9 +1,11 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AnalysisView } from "@/components/analysis-view";
 import type { Analysis, Criterion, Evidence } from "@/lib/contracts";
 
 const progress = new Map();
+
+afterEach(cleanup);
 
 const emptyAnalysis = {
   discovery: {
@@ -223,6 +225,75 @@ describe("AnalysisView states", () => {
       "Collaboration in Portland\n\nHello Sample Partner team, Portland; goal: community pop-up.",
     );
     expect(screen.getByText(/Not verified: Fees/)).toBeInTheDocument();
+  });
+
+  it("labels an AI-written complementarity line as AI interpretation, not Qloo", () => {
+    const analysis = analysisWithCandidate();
+    analysis.discovery.limitations = [
+      "The conventional baseline comes from OSM category data and has no Qloo taste evidence; it is not a like-for-like taste-affinity comparison.",
+      "An OSM listing verifies only that OpenStreetMap currently returns a matching record; it does not prove ownership or current operation. Qloo and OSM provide no shared identifier, so cross-source entity linkage is unverified.",
+    ];
+    const decision = analysis.candidate_decisions[0];
+    const qlooEvidence: Evidence = {
+      source_type: "qloo",
+      source_reference: "/v2/insights?entity=sample-partner-id",
+      claim: "Qloo returned the candidate for this taste query.",
+    };
+    decision.candidate.complementarity = {
+      assessment: "partial",
+      rationale: "An AI-written complementary idea, still a hypothesis.",
+      evidence: [
+        qlooEvidence,
+        {
+          source_type: "ai_interpretation",
+          source_reference: "Vyuha structured candidate interpretation",
+          claim: "A possible pairing, based on the stated brief.",
+        },
+      ],
+    };
+    render(
+      <AnalysisView analysis={analysis} error={null} progress={progress} state="results" />,
+    );
+
+    const candidateHeading = screen.getByRole("heading", {
+      level: 3,
+      name: "Sample Partner",
+    });
+    const candidateCard = candidateHeading.closest("article");
+    if (!(candidateCard instanceof HTMLElement)) {
+      throw new Error("The candidate should have a comparison card.");
+    }
+    fireEvent.click(within(candidateCard).getByText("Evidence by criterion"));
+    const interpretation = screen.getByText(
+      "An AI-written complementary idea, still a hypothesis.",
+    );
+    const line = interpretation.closest("div.flex");
+    if (!(line instanceof HTMLElement)) {
+      throw new Error("The complementarity line should have a provenance tag.");
+    }
+    expect(within(line).getByText("AI interpretation")).toBeInTheDocument();
+    expect(within(line).queryByText("Qloo")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Rule-based").length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(
+        "This same-industry option was found on the map, but it has no comparable taste signal.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "The map returned a matching listing, but that does not confirm ownership, current operation, or that the taste result and map entry refer to the same business.",
+      ),
+    ).toBeInTheDocument();
+
+    fireEvent.click(within(candidateCard).getByText("Critic details (1)"));
+    const criticism = within(candidateCard).getByText(
+      "The listing cannot be linked to the Qloo entity.",
+    );
+    const criticismItem = criticism.closest("li");
+    if (!(criticismItem instanceof HTMLElement)) {
+      throw new Error("The critic finding should have a list item.");
+    }
+    expect(within(criticismItem).getByText("Rule-based")).toBeInTheDocument();
   });
 
   it("keeps the cannot-verify skip reason visible", () => {

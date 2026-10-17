@@ -113,6 +113,57 @@ function readableCause(cause: string): string {
   return labels[cause] ?? cause.replaceAll("_", " ");
 }
 
+function criterionProvenance(
+  key: keyof CandidateDecision["candidate"],
+  criterion: Criterion,
+): Provenance {
+  if (key === "complementarity" || key === "goal_alignment") {
+    return criterion.evidence.some((entry) => entry.source_type === "ai_interpretation")
+      ? "ai_interpretation"
+      : "unknown";
+  }
+  if (key === "taste_affinity") {
+    return /Qloo (?:returned|affinity)/i.test(criterion.rationale) ? "qloo" : "unknown";
+  }
+  if (key === "evidence_relevance") {
+    if (/^Qloo returned/i.test(criterion.rationale)) return "qloo";
+    if (/OpenStreetMap category data/i.test(criterion.rationale)) return "external";
+  }
+  if (key === "geographic_logistical_suitability") {
+    if (/^Qloo metadata/i.test(criterion.rationale)) return "qloo";
+    if (/OpenStreetMap returned|exact-name OSM record was returned/i.test(criterion.rationale)) {
+      return "external";
+    }
+  }
+  return "rule_based";
+}
+
+function readableLimitation(limitation: string): string {
+  const plainLanguage: Record<string, string> = {
+    "The conventional baseline comes from OSM category data and has no Qloo taste evidence; it is not a like-for-like taste-affinity comparison.":
+      "This same-industry option was found on the map, but it has no comparable taste signal.",
+    "Some Qloo candidates could not be independently verified in the target market; they are shown as checks, not recommended candidates.":
+      "Some candidates could not be confirmed by an independent map listing, so they are shown for review rather than recommended.",
+    "Some complementarity or goal-alignment interpretations are missing or partial; unknowns remain unknown.":
+      "Some partner-fit assessments are incomplete; unsupported questions remain unanswered.",
+    "An OSM listing verifies only that OpenStreetMap currently returns a matching record; it does not prove ownership or current operation. Qloo and OSM provide no shared identifier, so cross-source entity linkage is unverified.":
+      "The map returned a matching listing, but that does not confirm ownership, current operation, or that the taste result and map entry refer to the same business.",
+    "The brief did not state an industry, so candidates cannot defensibly be classified as unexpected or used as a same-industry baseline.":
+      "The brief does not specify an industry, so Vyuha could not identify outside-industry partners or a same-industry alternative.",
+    "Qloo and OSM provide no shared identifier, so cross-source entity linkage is unverified.":
+      "We cannot confirm that the taste result and map listing refer to the same business.",
+  };
+  return (
+    plainLanguage[limitation] ??
+    limitation
+      .replace(/\bOSM\b/g, "map")
+      .replace(/cross-source entity linkage/gi, "link between source records")
+      .replace(/like-for-like/gi, "directly comparable")
+      .replace(/complementarity or goal-alignment interpretations/gi, "partner-fit assessments")
+      .replace(/unknowns remain unknown/gi, "unsupported questions remain unanswered")
+  );
+}
+
 function readableEntityType(value: string): string {
   const parts = value.split(":").filter(Boolean);
   const label = parts[parts.length - 1] || value;
@@ -125,10 +176,12 @@ function CandidateCard({
   item,
   baselineWithoutTaste,
   indexedEvidence,
+  criticTextSource,
 }: {
   item: CandidateDecision;
   baselineWithoutTaste: boolean;
   indexedEvidence: Map<string, Evidence>;
+  criticTextSource: Provenance;
 }) {
   const comparison = item.candidate;
   const nameSource: Provenance =
@@ -172,7 +225,7 @@ function CandidateCard({
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <RatingBadge rating={item.provisional_rating} />
-            <SourceTag source="ai_interpretation" />
+            <SourceTag source="rule_based" />
           </div>
         </div>
         <div>
@@ -181,7 +234,7 @@ function CandidateCard({
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <RatingBadge rating={item.final_rating} />
-            <SourceTag source="ai_interpretation" />
+            <SourceTag source="rule_based" />
           </div>
         </div>
       </div>
@@ -189,7 +242,7 @@ function CandidateCard({
       <div className="mt-4">
         <h4 className="font-semibold">Decision rationale</h4>
         <div className="mt-2 flex flex-wrap items-center gap-2">
-          <SourceTag source="ai_interpretation" />
+          <SourceTag source="rule_based" />
           <p
             className="line-clamp-1 text-sm leading-6 text-slate-700"
             title={item.rationale}
@@ -204,7 +257,9 @@ function CandidateCard({
         {item.downgrade_causes.length > 0 && (
           <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
             {item.downgrade_causes.map((cause) => (
-              <li key={cause}>{readableCause(cause)}</li>
+              <li key={cause}>
+                <SourceTag source="rule_based" /> {readableCause(cause)}
+              </li>
             ))}
           </ul>
         )}
@@ -236,7 +291,7 @@ function CandidateCard({
                   >
                     {criticism.severity} severity
                   </span>
-                  <SourceTag source="ai_interpretation" />
+                  <SourceTag source={criticTextSource} />
                 </div>
                 <p className="mt-2 text-sm leading-6">{criticism.issue}</p>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
@@ -275,7 +330,7 @@ function CandidateCard({
                   </span>
                 </div>
                 <div className="mt-2 flex flex-wrap items-start gap-2">
-                  <SourceTag source={criterion.evidence[0]?.source_type ?? "ai_interpretation"} />
+                  <SourceTag source={criterionProvenance(key, criterion)} />
                   <p className="min-w-0 flex-1 text-sm leading-6 text-slate-700">
                     {criterion.rationale}
                   </p>
@@ -419,14 +474,17 @@ export function AnalysisView({
             Overall decision
           </span>
           <RatingBadge rating={analysis.overall_decision.result} />
-          <SourceTag source="ai_interpretation" />
+          <SourceTag source="rule_based" />
         </div>
         <h2 className="mt-4 text-2xl font-bold tracking-tight sm:text-3xl">
           {analysis.overall_decision.selected_candidate_name ?? "No candidate supported"}
         </h2>
-        <p className="mt-3 max-w-3xl leading-7 text-slate-700">
-          {analysis.overall_decision.rationale}
-        </p>
+        <div className="mt-3 flex max-w-3xl flex-wrap items-start gap-2">
+          <SourceTag source="rule_based" />
+          <p className="min-w-0 flex-1 leading-7 text-slate-700">
+            {analysis.overall_decision.rationale}
+          </p>
+        </div>
         {partial && (
           <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm leading-6 text-amber-950">
             Partial results: the backend reported limitations. Review what is missing before acting.
@@ -452,7 +510,6 @@ export function AnalysisView({
             <p className="text-xs font-bold uppercase tracking-widest text-slate-500">
               Candidate comparison
             </p>
-            <h2 className="mt-1 text-2xl font-bold">The recommendation, challenged</h2>
           </div>
           <p className="text-xs text-slate-600">
             Affinity: relative signal from Qloo, not customer overlap.
@@ -466,6 +523,9 @@ export function AnalysisView({
               }
               item={item}
               indexedEvidence={indexedEvidence}
+              criticTextSource={
+                analysis.critic_text_status === "llm" ? "ai_interpretation" : "rule_based"
+              }
               key={item.candidate.candidate.entity_id}
             />
           ))}
@@ -482,7 +542,13 @@ export function AnalysisView({
               <li className="border-t border-line pt-4" key={`${criticism.code}-${index}`}>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-semibold">{criticism.severity.toUpperCase()} severity</span>
-                  <SourceTag source="ai_interpretation" />
+                  <SourceTag
+                    source={
+                      analysis.critic_text_status === "llm"
+                        ? "ai_interpretation"
+                        : "rule_based"
+                    }
+                  />
                 </div>
                 <p className="mt-2 text-sm leading-6">{criticism.issue}</p>
                 <p className="mt-1 text-sm text-slate-600">{criticism.effect_on_recommendation}</p>
@@ -524,7 +590,9 @@ export function AnalysisView({
                     Duration:{" "}
                     {experiment.duration_days === null
                       ? "Not specified in the brief; verify with the candidate."
-                      : `${experiment.duration_days} day(s), from the brief`}
+                      : `${experiment.duration_days} ${
+                          experiment.duration_days === 1 ? "day" : "days"
+                        }, from the brief`}
                   </p>
                   {experiment.event_structure.length > 0 && (
                     <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-slate-700">
@@ -619,7 +687,7 @@ export function AnalysisView({
               ...analysis.discovery.business_identity.limitations,
             ].map((limitation, index) => (
               <li key={`${limitation}-${index}`}>
-                <SourceTag source="unknown" /> {limitation}
+                <SourceTag source="unknown" /> {readableLimitation(limitation)}
               </li>
             ))}
           </ul>

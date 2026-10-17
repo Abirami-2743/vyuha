@@ -747,21 +747,30 @@ def _overall_decision(
         None,
     )
     selected = baseline or best[0]
-    tie_note = (
-        "The conventional baseline is selected as a conservative tie-break; this does not "
-        "establish commercial superiority."
-        if baseline is not None and len(best) > 1
-        else ""
-    )
+    tied = len(best) > 1
+    if tied:
+        other_count = len(best) - 1
+        other_label = "candidate" if other_count == 1 else "candidates"
+        rationale = (
+            f"The top final deterministic rating ({selected.final_rating}) is tied with "
+            f"{other_count} other {other_label}. "
+            + (
+                "Tie-break rule: prefer a conventional baseline; if several are tied, keep their "
+                "discovery order. "
+                if baseline is not None
+                else "Tie-break rule: keep the first tied candidate in discovery order. "
+            )
+        )
+    else:
+        rationale = (
+            f"The selected candidate has the highest final deterministic rating "
+            f"({selected.final_rating}). "
+        )
     return OverallDecision(
         result=selected.final_rating,
         selected_entity_id=selected.candidate.candidate.entity_id,
         selected_candidate_name=selected.candidate.candidate.name,
-        rationale=(
-            f"The selected candidate has the highest final deterministic rating "
-            f"({selected.final_rating}). {tie_note} A rating is not a probability or commercial "
-            "forecast."
-        ),
+        rationale=rationale + "A rating is not a probability or commercial forecast.",
         evidence_references=[
             item.source_reference
             for item in selected.candidate.candidate.evidence
@@ -776,16 +785,20 @@ def _make_experiment(decision: CandidateDecision, brief: BusinessBrief) -> Exper
     local_name = brief.city or brief.target_market or "the requested market"
     requirements = brief.event_requirements
     requirement_text = "; ".join(requirements) or "No event format or duration was specified."
+    requirement_sentence = requirement_text.rstrip()
+    if not requirement_sentence.endswith((".", "!", "?")):
+        requirement_sentence += "."
     duration_days = _duration_days(requirements)
     duration_text = (
-        f"Use the brief's stated duration of {duration_days} day(s)."
+        f"Use the brief's stated duration of {duration_days} "
+        f"{'day' if duration_days == 1 else 'days'}."
         if duration_days is not None
         else "Confirm the event duration with the candidate; the brief does not specify it."
     )
     rationale = _partner_rationale(comparison)
     format_text = (
         f"Pilot format for {brief.collaboration_goal} in {local_name}. "
-        f"Apply the brief's event requirements: {requirement_text} {duration_text}"
+        f"Brief requirements: {requirement_sentence} {duration_text}"
     )
     event_structure = [
         f"Agree a format with {candidate_name} that serves this goal: "

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnalysisView } from "@/components/analysis-view";
 import { SourceTag } from "@/components/evidence";
 import { analyze, checkApi } from "@/lib/api";
@@ -245,6 +245,7 @@ export default function Home() {
   const [progress, setProgress] = useState<Map<string, ProgressEvent>>(new Map());
   const [loading, setLoading] = useState(false);
   const [currentRequest, setCurrentRequest] = useState<DiscoveryRequest | null>(null);
+  const analysisInFlight = useRef(false);
 
   const checkBackend = useCallback(async () => {
     setApiReady(null);
@@ -255,7 +256,11 @@ export default function Home() {
     } catch (error) {
       setApiReady(false);
       setApiMessage(
-        error instanceof Error ? error.message : "Backend health check could not be completed.",
+        error instanceof TypeError
+          ? "The backend could not be reached. Check that it is running and that the API URL is correct."
+          : error instanceof Error
+            ? error.message
+            : "Backend health check could not be completed.",
       );
     }
   }, []);
@@ -265,6 +270,8 @@ export default function Home() {
   }, [screen, checkBackend]);
 
   const submitAnalysis = useCallback(async (request: DiscoveryRequest) => {
+    if (analysisInFlight.current) return;
+    analysisInFlight.current = true;
     setCurrentRequest(request);
     setScreen("analysis");
     setLoading(true);
@@ -297,12 +304,16 @@ export default function Home() {
       setAnalysisError(
         controller.signal.aborted
           ? "The analysis timed out while waiting for the backend. Check backend logs and try again."
+          : error instanceof TypeError &&
+              /^(failed to fetch|network error|load failed)$/i.test(error.message)
+            ? "The backend connection was lost during analysis. Check that it is running, then try again."
           : error instanceof Error
             ? error.message
             : "The analysis request could not be completed.",
       );
     } finally {
       window.clearTimeout(timeoutId);
+      analysisInFlight.current = false;
       setLoading(false);
     }
   }, []);
@@ -474,7 +485,7 @@ export default function Home() {
             ) : (
               <>
                 <span className="text-rose-800">
-                  Backend unavailable: {apiMessage} Set NEXT_PUBLIC_API_URL and start the API.
+                  Backend unavailable: {apiMessage}
                 </span>
                 <button
                   className="rounded border border-line px-3 py-1.5 font-semibold hover:bg-white"
@@ -657,7 +668,8 @@ export default function Home() {
               </p>
             )}
             <button
-              className="w-full rounded-lg bg-forest px-5 py-3 font-semibold text-white hover:bg-emerald-950 sm:w-auto"
+              className="w-full rounded-lg bg-forest px-5 py-3 font-semibold text-white hover:bg-emerald-950 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+              disabled={loading}
               type="submit"
             >
               Discover partners

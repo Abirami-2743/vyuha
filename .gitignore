@@ -47,3 +47,5 @@ tmp/
 *.log
 
 *.tsbuildinfo
+
+*.tsbuildinfo

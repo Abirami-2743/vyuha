@@ -405,6 +405,32 @@ def test_stronger_conventional_baseline_wins_over_unverified_candidate() -> None
     }
 
 
+def test_tied_top_rating_prefers_conventional_baseline_and_explains_rule() -> None:
+    async def exercise() -> AnalysisResult:
+        engine, client = _engine()
+        baseline = _comparison(
+            "baseline-tied",
+            name="Fixture Cosmetics",
+            role="conventional_baseline",
+            linkage="verified",
+        )
+        unexpected = _comparison("unexpected-tied", linkage="verified")
+        try:
+            return await engine.analyze(
+                _discovery([unexpected, baseline], baseline_id="baseline-tied"),
+                _brief(),
+            )
+        finally:
+            await client.aclose()
+
+    result = run(exercise())
+    assert result.candidate_decisions[0].final_rating == result.candidate_decisions[1].final_rating
+    assert result.overall_decision.selected_entity_id == "baseline-tied"
+    assert "tied with 1 other candidate" in result.overall_decision.rationale
+    assert "prefer a conventional baseline" in result.overall_decision.rationale
+    assert "highest final deterministic rating" not in result.overall_decision.rationale
+
+
 def test_osm_only_baseline_is_critiqued_and_skipped_without_relaxing_rules() -> None:
     async def exercise() -> AnalysisResult:
         engine, client = _engine()
@@ -517,6 +543,11 @@ def test_experiment_and_outreach_are_created_only_for_eligible_ratings() -> None
     assert result.experiments[0].candidate_name == FIXTURE_NAME
     assert result.experiments[0].duration_days == 2
     assert "Two-day pop-up" in result.experiments[0].test_format
+    assert (
+        "Brief requirements: Two-day pop-up; Table space provided. "
+        "Use the brief's stated duration of 2 days."
+    ) in result.experiments[0].test_format
+    assert "day(s)" not in result.experiments[0].test_format
     assert all(
         "Suggested target:" in item for item in result.experiments[0].success_criteria
     )

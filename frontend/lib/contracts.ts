@@ -1,8 +1,9 @@
-export type Provenance = "qloo" | "external" | "ai_interpretation" | "unknown";
+export type EvidenceProvenance = "qloo" | "external" | "ai_interpretation" | "unknown";
+export type Provenance = EvidenceProvenance | "rule_based";
 export type Rating = "STRONG FIT" | "WORTH TESTING" | "SKIP";
 
 export interface Evidence {
-  source_type: Provenance;
+  source_type: EvidenceProvenance;
   source_reference: string;
   claim: string;
 }

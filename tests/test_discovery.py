@@ -311,8 +311,33 @@ def test_blue_bottle_seed_identity_does_not_surface_ferry_building_as_partner() 
             return httpx.Response(200, json=[place("Selected Venue Alias", 10)])
         if query == "Gott's SF Ferry Building, San Francisco":
             return httpx.Response(200, json=[place("Gott's SF Ferry Building", 12)])
-        if query == "cafe shops in San Francisco":
-            return httpx.Response(200, json=[place("Ferry Building", 10)])
+        if query == "cafes in San Francisco":
+            neighborhood_cafe = place("Neighborhood Cafe", 20)
+            neighborhood_cafe["display_name"] = (
+                "Neighborhood Cafe, San Francisco, California, United States"
+            )
+            neighborhood_cafe["address"] = {
+                "city": "San Francisco",
+                "state": "California",
+                "country": "USA",
+            }
+            own_business = place("Blue Bottle Coffee", 21)
+            own_business["display_name"] = (
+                "Blue Bottle Coffee, San Francisco, California, United States"
+            )
+            own_business["address"] = {
+                "city": "San Francisco",
+                "state": "California",
+                "country": "USA",
+            }
+            return httpx.Response(
+                200,
+                json=[
+                    place("Ferry Building", 10),
+                    own_business,
+                    neighborhood_cafe,
+                ],
+            )
         return httpx.Response(200, json=[])
 
     result = run(
@@ -336,7 +361,13 @@ def test_blue_bottle_seed_identity_does_not_surface_ferry_building_as_partner() 
     assert all(
         "Ferry Building" not in item.candidate.name for item in result.candidate_checks
     )
-    assert result.conventional_baseline is None
+    assert result.conventional_baseline is not None
+    assert result.conventional_baseline.candidate.name == "Neighborhood Cafe"
+    assert result.conventional_baseline.identity_verification.status == "verified"
+    assert result.conventional_baseline.identity_verification.location_relevance == (
+        "osm_category_verified"
+    )
+    assert all(item.candidate.name != "Blue Bottle Coffee" for item in result.candidate_checks)
     assert all(
         "Ferry Building" not in item.candidate.name
         for item in [

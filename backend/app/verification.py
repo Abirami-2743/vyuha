@@ -92,7 +92,21 @@ class NominatimClient:
                 status_code=422,
             )
 
-        return await self._search(f"{clean_category} shops in {clean_market}")
+        words = clean_category.split()
+        last_word = words[-1]
+        if last_word.casefold().endswith("s"):
+            search_category = f"{clean_category} shops"
+        elif (
+            len(last_word) > 1
+            and last_word.casefold().endswith("y")
+            and last_word[-2].casefold() not in "aeiou"
+        ):
+            search_category = f"{clean_category[:-1]}ies"
+        elif last_word.casefold().endswith(("ch", "sh", "x", "z")):
+            search_category = f"{clean_category}es"
+        else:
+            search_category = f"{clean_category}s"
+        return await self._search(f"{search_category} in {clean_market}")
 
     async def _search(self, query: str) -> list[OSMPlace]:
         async with self._request_lock:
