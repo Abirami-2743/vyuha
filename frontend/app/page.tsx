@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnalysisView } from "@/components/analysis-view";
 import { SourceTag } from "@/components/evidence";
-import { analyze, checkApi } from "@/lib/api";
+import { analyze, checkApi, getSavedRun } from "@/lib/api";
 import type {
   Analysis,
   DiscoveryRequest,
   Place,
   ProgressEvent,
+  SavedRun,
   StageEvent,
 } from "@/lib/contracts";
 
@@ -32,6 +33,21 @@ const initialBrief = {
   requirements: "",
   constraints: "",
   seeds: "",
+};
+
+const sampleBrief = {
+  ...initialBrief,
+  businessName: "Blue Bottle Coffee",
+  industry: "Coffee",
+  city: "San Francisco",
+  targetMarket: "San Francisco coffee drinkers and local event-goers",
+  website: "https://bluebottlecoffee.com",
+  identifyingInfo: "Specialty coffee brand",
+  goal: "Explore a low-cost cross-industry partner for a one-day San Francisco coffee pop-up; learn whether the format is feasible before committing.",
+  budgetMin: "0",
+  budgetMax: "500",
+  requirements: "One-day pop-up\nShared space\nCoffee service",
+  constraints: "Keep total costs under $500\nVerify partner availability and fees before commitment",
 };
 
 function lines(value: string): string[] {
@@ -242,6 +258,8 @@ export default function Home() {
   const [formError, setFormError] = useState("");
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [savedRun, setSavedRun] = useState<SavedRun | null>(null);
+  const [analysisIsSaved, setAnalysisIsSaved] = useState(false);
   const [progress, setProgress] = useState<Map<string, ProgressEvent>>(new Map());
   const [loading, setLoading] = useState(false);
   const [currentRequest, setCurrentRequest] = useState<DiscoveryRequest | null>(null);
@@ -269,6 +287,27 @@ export default function Home() {
     if (screen === "landing") void checkBackend();
   }, [screen, checkBackend]);
 
+  useEffect(() => {
+    let mounted = true;
+    void getSavedRun()
+      .then((run) => {
+        if (mounted && run) {
+          setSavedRun(run);
+        }
+      })
+      .catch((error: unknown) => {
+        if (mounted) {
+          console.error("saved_run_load_failed", {
+            event: "saved_run_load_failed",
+            exception_type: error instanceof Error ? error.name : "UnknownError",
+          });
+        }
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const submitAnalysis = useCallback(async (request: DiscoveryRequest) => {
     if (analysisInFlight.current) return;
     analysisInFlight.current = true;
@@ -277,6 +316,7 @@ export default function Home() {
     setLoading(true);
     setAnalysis(null);
     setAnalysisError(null);
+    setAnalysisIsSaved(false);
     setProgress(new Map());
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 240_000);
@@ -294,6 +334,14 @@ export default function Home() {
           if (event.status === "failed") throw new Error(event.message);
           if (event.result) {
             setAnalysis(event.result);
+            if (event.result.discovery.status !== "needs_user_choice") {
+              const run = { captured_at: new Date().toISOString(), analysis: event.result };
+              setSavedRun((current) =>
+                current && Date.parse(current.captured_at) > Date.parse(run.captured_at)
+                  ? current
+                  : run,
+              );
+            }
             receivedResult = true;
           }
         },
@@ -301,72 +349,93 @@ export default function Home() {
       );
       if (!receivedResult) throw new Error("The stream ended before a complete analysis arrived.");
     } catch (error) {
-      setAnalysisError(
+      const failureMessage =
         controller.signal.aborted
           ? "The analysis timed out while waiting for the backend. Check backend logs and try again."
           : error instanceof TypeError &&
               /^(failed to fetch|network error|load failed)$/i.test(error.message)
-            ? "The backend connection was lost during analysis. Check that it is running, then try again."
-          : error instanceof Error
-            ? error.message
-            : "The analysis request could not be completed.",
-      );
+            ? "The backend connection was lost during analysis."
+            : error instanceof Error
+              ? error.message
+              : "The analysis request could not be completed.";
+      let fileRun: SavedRun | null = null;
+      let savedRunLoadFailed = false;
+      try {
+        fileRun = await getSavedRun();
+      } catch {
+        savedRunLoadFailed = true;
+      }
+      const fallback = fileRun ?? savedRun;
+      if (fallback) {
+        setAnalysis(fallback.analysis);
+        setSavedRun(fallback);
+        setAnalysisIsSaved(true);
+        setAnalysisError(failureMessage);
+      } else {
+        setAnalysisError(
+          `${failureMessage} ${
+            savedRunLoadFailed
+              ? "The configured saved run could not be loaded."
+              : "No private saved run is available."
+          }`,
+        );
+      }
     } finally {
       window.clearTimeout(timeoutId);
       analysisInFlight.current = false;
       setLoading(false);
     }
-  }, []);
+  }, [savedRun]);
 
-  function createRequest(): DiscoveryRequest | null {
-    const minimum = Number(form.budgetMin);
-    const maximum = Number(form.budgetMax);
-    const seeds = lines(form.seeds);
-    const requirements = lines(form.requirements);
-    const constraints = lines(form.constraints);
-    if (!form.businessName.trim()) {
+  function createRequest(values: typeof initialBrief = form): DiscoveryRequest | null {
+    const minimum = Number(values.budgetMin);
+    const maximum = Number(values.budgetMax);
+    const seeds = lines(values.seeds);
+    const requirements = lines(values.requirements);
+    const constraints = lines(values.constraints);
+    if (!values.businessName.trim()) {
       setFormError("Enter the business name.");
       return null;
     }
     if (
-      form.businessName.trim().length > 160 ||
-      form.industry.trim().length > 160 ||
-      form.city.trim().length > 120 ||
-      form.targetMarket.trim().length > 240
+      values.businessName.trim().length > 160 ||
+      values.industry.trim().length > 160 ||
+      values.city.trim().length > 120 ||
+      values.targetMarket.trim().length > 240
     ) {
       setFormError("Business name, industry, city, or target market exceeds its allowed length.");
       return null;
     }
-    if (!form.goal.trim() || form.goal.trim().length < 10) {
+    if (!values.goal.trim() || values.goal.trim().length < 10) {
       setFormError("Describe the collaboration goal in at least 10 characters.");
       return null;
     }
-    if (form.goal.trim().length > 2000 || form.identifyingInfo.trim().length > 1000) {
+    if (values.goal.trim().length > 2000 || values.identifyingInfo.trim().length > 1000) {
       setFormError("The collaboration goal or identifying information exceeds its allowed length.");
       return null;
     }
     if (
       !Number.isFinite(minimum) ||
       !Number.isFinite(maximum) ||
-      form.budgetMin.trim() === "" ||
-      form.budgetMax.trim() === "" ||
+      values.budgetMin.trim() === "" ||
+      values.budgetMax.trim() === "" ||
       minimum < 0 ||
       maximum < minimum
     ) {
       setFormError("Enter a valid budget range; the maximum must be at least the minimum.");
       return null;
     }
-    if (!form.city.trim() && !form.targetMarket.trim()) {
+    if (!values.city.trim() && !values.targetMarket.trim()) {
       setFormError("Enter a city or target market.");
       return null;
     }
-    if (!form.website.trim() && !form.identifyingInfo.trim()) {
+    if (!values.website.trim() && !values.identifyingInfo.trim()) {
       setFormError("Enter a website or other information that identifies the business.");
       return null;
     }
     if (
-      (form.website.trim() && !/^https?:\/\/.+/i.test(form.website.trim())) ||
-      (form.website.trim() && !URL.canParse(form.website.trim()))
+      (values.website.trim() && !/^https?:\/\/.+/i.test(values.website.trim())) ||
+      (values.website.trim() && !URL.canParse(values.website.trim()))
     ) {
       setFormError("Enter a complete website address starting with http:// or https://.");
       return null;
@@ -395,13 +464,13 @@ export default function Home() {
     setFormError("");
     return {
       brief: {
-        business_name: form.businessName.trim(),
-        industry: form.industry.trim() || null,
-        city: form.city.trim() || null,
-        target_market: form.targetMarket.trim() || null,
-        website: form.website.trim() || null,
-        identifying_info: form.identifyingInfo.trim() || null,
-        collaboration_goal: form.goal.trim(),
+        business_name: values.businessName.trim(),
+        industry: values.industry.trim() || null,
+        city: values.city.trim() || null,
+        target_market: values.targetMarket.trim() || null,
+        website: values.website.trim() || null,
+        identifying_info: values.identifyingInfo.trim() || null,
+        collaboration_goal: values.goal.trim(),
         budget_range: { minimum, maximum, currency: "USD" },
         event_requirements: requirements,
         constraints,
@@ -416,7 +485,7 @@ export default function Home() {
 
   const viewState = useMemo(() => {
     if (loading) return "loading" as const;
-    if (analysisError) return "error" as const;
+    if (analysisError && !analysis) return "error" as const;
     if (!analysis || analysis.candidate_decisions.length === 0) return "empty" as const;
     if (analysis.discovery.status === "partial") return "partial" as const;
     return "results" as const;
@@ -453,12 +522,45 @@ export default function Home() {
               Find cross-industry collaboration ideas, inspect the evidence, and pressure-test a
               small experiment before committing your budget.
             </p>
+          </div>
+
+          <section aria-labelledby="how-vyuha-works" className="mt-10 max-w-4xl rounded-xl border border-line bg-white p-5 sm:p-7">
+            <h2 className="text-xl font-bold" id="how-vyuha-works">
+              A partnership bet should be tested, not guessed.
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-700">
+              Independent businesses can spend scarce time and budget on a pop-up partner without
+              knowing whether the idea is worth testing.
+            </p>
+            <ol className="mt-4 space-y-2 text-sm leading-6 text-slate-700">
+              <li>1. Compare unexpected partners with a conventional alternative using cultural taste evidence.</li>
+              <li>2. Check available identity and local-listing evidence; keep gaps marked unknown.</li>
+              <li>3. Ask a critic to challenge the pick, downgrade it, or abstain before proposing a small test.</li>
+            </ol>
+            <p className="mt-4 flex flex-wrap items-center gap-2 text-sm leading-6 text-slate-700">
+              <SourceTag source="qloo" />
+              Qloo contributes cross-category taste affinity—not proof of shared customers, demand, or success.
+            </p>
+          </section>
+
+          <div className="mt-7 flex flex-wrap gap-3">
             <button
-              className="mt-8 rounded-lg bg-forest px-6 py-3 font-semibold text-white hover:bg-emerald-950"
+              className="rounded-lg bg-forest px-6 py-3 font-semibold text-white hover:bg-emerald-950"
+              onClick={() => {
+                setForm(sampleBrief);
+                const request = createRequest(sampleBrief);
+                if (request) void submitAnalysis(request);
+              }}
+              type="button"
+            >
+              Try a sample brief
+            </button>
+            <button
+              className="rounded-lg border border-line bg-white px-6 py-3 font-semibold text-forest hover:bg-paper"
               onClick={() => setScreen("brief")}
               type="button"
             >
-              Start a partnership brief
+              Start your own brief
             </button>
           </div>
 
@@ -479,13 +581,16 @@ export default function Home() {
 
           <div aria-live="polite" className="mt-12 flex flex-wrap items-center gap-3 text-sm">
             {apiReady === null ? (
-              <span className="text-slate-600">Checking live backend…</span>
+              <span className="text-slate-600">
+                Waking up the server; free hosted instances can take up to a minute. Checking the live connection…
+              </span>
             ) : apiReady ? (
               <span className="font-semibold text-forest">Backend connected</span>
             ) : (
               <>
                 <span className="text-rose-800">
-                  Backend unavailable: {apiMessage}
+                  Backend may be waking up; free hosted instances can take up to a minute.{" "}
+                  {apiMessage}
                 </span>
                 <button
                   className="rounded border border-line px-3 py-1.5 font-semibold hover:bg-white"
@@ -680,6 +785,17 @@ export default function Home() {
 
       {screen === "analysis" && (
         <section className="mx-auto max-w-7xl px-5 py-8 sm:px-8 sm:py-12">
+          {analysisIsSaved && savedRun && (
+            <div
+              className="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-950"
+              role="status"
+            >
+              <p className="font-bold">
+                Saved run from {new Date(savedRun.captured_at).toLocaleString()}, not live.
+              </p>
+              <p>Live analysis unavailable: {analysisError}</p>
+            </div>
+          )}
           <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-xs font-bold uppercase tracking-widest text-forest">
@@ -720,6 +836,7 @@ export default function Home() {
               }
               progress={progress}
               state={viewState}
+              isSavedRun={analysisIsSaved}
             />
           )}
         </section>

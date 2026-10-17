@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -14,17 +18,91 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from .analysis_models import AnalysisStreamEvent
+from .analysis_models import AnalysisResult, AnalysisStreamEvent
 from .discovery_models import DiscoveryRequest, DiscoveryResult
 from .errors import IntegrationError
 from .llm import LLMClient
 from .logging_config import configure_logging
 from .pipeline import DiscoveryPipeline
 from .qloo import QlooClient
-from .settings import Settings, get_settings
+from .settings import REPOSITORY_ROOT, Settings, get_settings
 from .verification import NominatimClient
 
 logger = logging.getLogger("vyuha.api")
+
+
+class DailyAnalysisLimiter:
+    def __init__(self, per_ip_limit: int, daily_limit: int) -> None:
+        self.per_ip_limit = per_ip_limit
+        self.daily_limit = daily_limit
+        self.day: str | None = None
+        self.total = 0
+        self.per_ip: dict[str, int] = {}
+        self._lock = asyncio.Lock()
+
+    async def consume(self, client_ip: str) -> tuple[str | None, int]:
+        now = datetime.now(timezone.utc)
+        day = now.date().isoformat()
+        retry_after = max(
+            1,
+            int(
+                (
+                    datetime.combine(now.date() + timedelta(days=1), datetime.min.time())
+                    .replace(tzinfo=timezone.utc)
+                    - now
+                ).total_seconds()
+            ),
+        )
+        async with self._lock:
+            if self.day != day:
+                self.day = day
+                self.total = 0
+                self.per_ip.clear()
+            if self.total >= self.daily_limit:
+                return "daily", retry_after
+            if self.per_ip.get(client_ip, 0) >= self.per_ip_limit:
+                return "per_ip", retry_after
+            self.total += 1
+            self.per_ip[client_ip] = self.per_ip.get(client_ip, 0) + 1
+            return None, retry_after
+
+
+def persist_saved_run(path: Path | None, analysis: AnalysisResult) -> None:
+    if path is None:
+        return
+    destination = path if path.is_absolute() else REPOSITORY_ROOT / path
+    temporary_path: Path | None = None
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=destination.parent,
+            prefix=f"{destination.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            json.dump(
+                {
+                    "captured_at": datetime.now(timezone.utc).isoformat(),
+                    "analysis": analysis.model_dump(mode="json"),
+                },
+                temporary_file,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        temporary_path.replace(destination)
+    except OSError as exc:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        logger.error(
+            "saved_run_write_failed",
+            extra={
+                "event": "saved_run_write_failed",
+                "exception_type": type(exc).__name__,
+            },
+        )
 
 
 class RequestLimitAndLoggingMiddleware:
@@ -133,6 +211,10 @@ class RequestLimitAndLoggingMiddleware:
 def create_app(settings: Settings | None = None) -> FastAPI:
     configured = settings or get_settings()
     configure_logging(configured.log_level)
+    analysis_limiter = DailyAnalysisLimiter(
+        configured.analysis_per_ip_daily_limit,
+        configured.analysis_daily_limit,
+    )
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -211,14 +293,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok", "service": "vyuha"}
 
     @application.post("/discover", response_model=DiscoveryResult)
-    async def discover(request: DiscoveryRequest) -> DiscoveryResult:
+    async def discover(
+        request: DiscoveryRequest,
+        incoming_request: Request,
+    ) -> DiscoveryResult | JSONResponse:
+        client_ip = incoming_request.client.host if incoming_request.client else "unknown"
+        limit, retry_after = await analysis_limiter.consume(client_ip)
+        if limit is not None:
+            message = (
+                "Vyuha's daily public-demo limit has been reached. Try again after the UTC reset "
+                "or use a saved run if one is available."
+                if limit == "daily"
+                else "The daily request limit for this network has been reached. Try again after "
+                "the UTC reset or use a saved run if one is available."
+            )
+            return JSONResponse(
+                status_code=429,
+                content={"error": f"{limit}_analysis_limit", "message": message},
+                headers={"Retry-After": str(retry_after)},
+            )
         return await application.state.discovery_pipeline.run(request)
 
-    @application.post("/analyze")
-    async def analyze(request: DiscoveryRequest) -> StreamingResponse:
+    @application.post("/analyze", response_model=None)
+    async def analyze(
+        request: DiscoveryRequest,
+        incoming_request: Request,
+    ) -> StreamingResponse | JSONResponse:
+        client_ip = incoming_request.client.host if incoming_request.client else "unknown"
+        limit, retry_after = await analysis_limiter.consume(client_ip)
+        if limit is not None:
+            message = (
+                "Vyuha's daily public-demo limit has been reached. Try again after the UTC reset "
+                "or use a saved run if one is available."
+                if limit == "daily"
+                else "The daily request limit for this network has been reached. Try again after "
+                "the UTC reset or use a saved run if one is available."
+            )
+            return JSONResponse(
+                status_code=429,
+                content={"error": f"{limit}_analysis_limit", "message": message},
+                headers={"Retry-After": str(retry_after)},
+            )
+
         async def events() -> AsyncIterator[str]:
             try:
                 async for event in application.state.discovery_pipeline.analyze_stream(request):
+                    if (
+                        event.stage == "analysis"
+                        and event.status == "complete"
+                        and event.result is not None
+                    ):
+                        persist_saved_run(configured.vyuha_saved_run_path, event.result)
                     yield f"data: {event.model_dump_json()}\n\n"
             except IntegrationError as exc:
                 logger.warning(

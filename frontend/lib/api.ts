@@ -1,12 +1,25 @@
-import type { DiscoveryRequest, StageEvent } from "@/lib/contracts";
+import { isSavedRun } from "@/lib/contracts";
+import type { DiscoveryRequest, SavedRun, StageEvent } from "@/lib/contracts";
 
 export const API_URL = (
   process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"
 ).replace(/\/+$/, "");
 
 export async function checkApi(): Promise<void> {
-  const response = await fetch(`${API_URL}/health`, { cache: "no-store" });
+  const response = await fetch(`${API_URL}/health`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(65_000),
+  });
   if (!response.ok) throw new Error(`Backend health check failed (${response.status}).`);
+}
+
+export async function getSavedRun(): Promise<SavedRun | null> {
+  const response = await fetch("/api/saved-run", { cache: "no-store" });
+  if (response.status === 204) return null;
+  if (!response.ok) throw new Error(`Saved run could not be loaded (${response.status}).`);
+  const savedRun: unknown = await response.json();
+  if (!isSavedRun(savedRun)) throw new Error("The configured saved run is invalid.");
+  return savedRun;
 }
 
 export async function analyze(

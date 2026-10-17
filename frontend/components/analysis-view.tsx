@@ -184,6 +184,9 @@ function CandidateCard({
   criticTextSource: Provenance;
 }) {
   const comparison = item.candidate;
+  const qlooTasteEvidence = comparison.taste_affinity.evidence.find(
+    (entry) => entry.source_type === "qloo",
+  );
   const nameSource: Provenance =
     comparison.role === "conventional_baseline" &&
     !comparison.identity_verification.evidence.some((entry) => entry.source_type === "qloo")
@@ -214,6 +217,15 @@ function CandidateCard({
               ? ` · ${readableEntityType(comparison.candidate.subtype)}`
               : ""}
           </p>
+          {qlooTasteEvidence && (
+            <p className="mt-3 flex flex-wrap items-start gap-2 text-sm leading-6 text-slate-700">
+              <SourceTag source="qloo" />
+              <span>
+                Why Qloo suggests this: {qlooTasteEvidence.claim} This is a taste signal, not
+                evidence of shared customers.
+              </span>
+            </p>
+          )}
         </div>
         <RatingBadge rating={item.final_rating} />
       </div>
@@ -371,12 +383,14 @@ export function AnalysisView({
   error,
   progress,
   onRetry,
+  isSavedRun = false,
 }: {
   state: ViewState;
   analysis: Analysis | null;
   error: string | null;
   progress: Map<string, { status: string; message: string }>;
   onRetry?: () => void;
+  isSavedRun?: boolean;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState("");
@@ -385,6 +399,10 @@ export function AnalysisView({
     return (
       <section aria-live="polite" className="rounded-xl border border-line bg-white p-6">
         <p className="font-semibold">Analysis in progress</p>
+        <p className="mt-2 text-sm leading-6 text-slate-700">
+          Waking up the server? Free hosted instances can take up to a minute. The request stays
+          open while the service starts.
+        </p>
         <ul className="mt-5 space-y-3">
           {stageLabels.map(([stage, label]) => {
             const event = progress.get(stage);
@@ -442,8 +460,8 @@ export function AnalysisView({
       <section className="rounded-xl border border-line bg-white p-6">
         <h2 className="text-lg font-bold">No candidates to compare</h2>
         <p className="mt-2 text-sm leading-6 text-slate-700">
-          The live analysis returned no candidate decisions. Vyuha won&apos;t fill the gap with
-          suggestions or estimates.
+          The {isSavedRun ? "saved" : "live"} analysis returned no candidate decisions. Vyuha
+          won&apos;t fill the gap with suggestions or estimates.
         </p>
       </section>
     );
@@ -465,9 +483,41 @@ export function AnalysisView({
   const outreach = analysis.outreach_drafts[0];
   const indexedEvidence = evidenceIndex(analysis);
   const activeDraft = draft ?? (outreach ? `${outreach.subject}\n\n${outreach.body}` : "");
+  const criticCuts = analysis.candidate_decisions.filter(
+    (decision) => decision.provisional_rating !== "SKIP" && decision.final_rating === "SKIP",
+  ).length;
+  const recommendedName =
+    analysis.overall_decision.selected_candidate_name ?? "No candidate supported";
+  const recommendedExperiment = analysis.experiments.find(
+    (experiment) => experiment.candidate_name === analysis.overall_decision.selected_candidate_name,
+  );
+  const nextStep = recommendedExperiment?.next_step.trim() || "No next step was returned.";
 
   return (
     <div className="space-y-8">
+      <section
+        aria-label="Verdict"
+        className="rounded-xl border border-forest/30 bg-forest p-5 text-white sm:p-6"
+      >
+        <p className="text-xs font-bold uppercase tracking-widest text-emerald-100">Verdict</p>
+        <p className="mt-3 text-lg font-bold leading-7 sm:text-xl">
+          {analysis.candidate_decisions.length} candidates found · critic cut {criticCuts} ·
+          recommended: {recommendedName} ({analysis.overall_decision.result}) · next step: {nextStep}
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <SourceTag source="rule_based" />
+          {recommendedExperiment ? (
+            <SourceTag source="rule_based" />
+          ) : (
+            <SourceTag source="unknown" />
+          )}
+        </div>
+        <p className="mt-3 text-xs leading-5 text-emerald-50">
+          Candidate and critic counts come from this analysis; a rating is not a probability or
+          commercial forecast.
+        </p>
+      </section>
+
       <section className="rounded-xl border border-forest/20 bg-white p-6 sm:p-8">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-bold uppercase tracking-widest text-forest">
@@ -573,7 +623,7 @@ export function AnalysisView({
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold">
               Suggested targets
             </span>
-            <SourceTag source="ai_interpretation" />
+            <SourceTag source="rule_based" />
           </div>
           {analysis.experiments.length ? (
             <ul className="mt-4 space-y-5">

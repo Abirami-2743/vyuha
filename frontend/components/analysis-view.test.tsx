@@ -157,6 +157,8 @@ describe("AnalysisView states", () => {
     );
 
     expect(screen.getByText("Analysis in progress")).toBeInTheDocument();
+    expect(screen.getByText(/Waking up the server\? Free hosted instances can take up to a minute/))
+      .toBeInTheDocument();
     expect(screen.getByText("Challenge the recommendation")).toBeInTheDocument();
     expect(screen.getByLabelText("running")).toBeInTheDocument();
     expect(screen.getAllByLabelText("not started").length).toBeGreaterThan(0);
@@ -174,6 +176,23 @@ describe("AnalysisView states", () => {
 
     expect(screen.getByText("No candidates to compare")).toBeInTheDocument();
     expect(screen.getByText(/won't fill the gap with suggestions/i)).toBeInTheDocument();
+  });
+
+  it("does not describe a saved empty result as live", () => {
+    render(
+      <AnalysisView
+        analysis={emptyAnalysis}
+        error={null}
+        isSavedRun
+        progress={progress}
+        state="empty"
+      />,
+    );
+
+    expect(screen.getByText(/The saved analysis returned no candidate decisions/))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/The live analysis returned no candidate decisions/))
+      .not.toBeInTheDocument();
   });
 
   it("surfaces backend errors", () => {
@@ -225,6 +244,56 @@ describe("AnalysisView states", () => {
       "Collaboration in Portland\n\nHello Sample Partner team, Portland; goal: community pop-up.",
     );
     expect(screen.getByText(/Not verified: Fees/)).toBeInTheDocument();
+  });
+
+  it("summarizes data-derived verdict counts and explains returned Qloo taste candidates", () => {
+    const analysis = analysisWithCandidate();
+    const decision = analysis.candidate_decisions[0];
+    decision.candidate.candidate.source_seed_names = ["Blue Bottle Coffee"];
+    decision.candidate.candidate.evidence = [
+      {
+        source_type: "qloo",
+        source_reference: "/v2/insights",
+        claim: "Qloo returned this candidate for the selected brand.",
+      },
+    ];
+    decision.candidate.taste_affinity.evidence = [
+      {
+        source_type: "qloo",
+        source_reference: "/v2/insights",
+        claim: "Qloo returned this candidate for the selected brand.",
+      },
+    ];
+    decision.provisional_rating = "WORTH TESTING";
+    decision.final_rating = "SKIP";
+    analysis.overall_decision = {
+      result: "no candidate supported",
+      selected_entity_id: null,
+      selected_candidate_name: null,
+      rationale: "The critic did not support a candidate.",
+      evidence_references: [],
+    };
+
+    render(
+      <AnalysisView
+        analysis={analysis}
+        error={null}
+        progress={progress}
+        state="results"
+      />,
+    );
+
+    const verdict = screen.getByRole("region", { name: "Verdict" });
+    expect(verdict).toHaveTextContent(
+      "1 candidates found · critic cut 1 · recommended: No candidate supported (no candidate supported)",
+    );
+    expect(verdict).toHaveTextContent("No next step was returned.");
+    expect(
+      screen.getByText(/Why Qloo suggests this: Qloo returned this candidate for the selected brand/),
+    )
+      .toBeInTheDocument();
+    expect(screen.getByText(/This is a taste signal, not evidence of shared customers/))
+      .toBeInTheDocument();
   });
 
   it("labels an AI-written complementarity line as AI interpretation, not Qloo", () => {

@@ -45,6 +45,7 @@ Thumbs.db
 .cache/
 tmp/
 *.log
+.vyuha-private/
 
 *.tsbuildinfo
 

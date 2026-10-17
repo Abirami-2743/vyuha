@@ -37,8 +37,11 @@ class Settings(BaseSettings):
     llm_http_referer: str | None = Field(default=None, max_length=500)
     llm_app_title: str | None = Field(default="Vyuha", max_length=100)
 
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     max_request_bytes: int = Field(default=1_048_576, ge=1_024, le=10_485_760)
+    analysis_per_ip_daily_limit: int = Field(default=10, ge=1, le=10_000)
+    analysis_daily_limit: int = Field(default=100, ge=1, le=100_000)
+    vyuha_saved_run_path: Path | None = None
     log_level: str = Field(default="INFO", pattern=r"^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
 
     @property

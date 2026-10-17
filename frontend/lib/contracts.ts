@@ -166,6 +166,37 @@ export interface Analysis {
   critic_text_note: string | null;
 }
 
+export interface SavedRun {
+  captured_at: string;
+  analysis: Analysis;
+}
+
+export function isSavedRun(value: unknown): value is SavedRun {
+  if (typeof value !== "object" || value === null) return false;
+  const savedRun = value as Record<string, unknown>;
+  if (
+    typeof savedRun.captured_at !== "string" ||
+    !Number.isFinite(Date.parse(savedRun.captured_at)) ||
+    typeof savedRun.analysis !== "object" ||
+    savedRun.analysis === null
+  ) {
+    return false;
+  }
+  const analysis = savedRun.analysis as Record<string, unknown>;
+  if (
+    !Array.isArray(analysis.candidate_decisions) ||
+    !Array.isArray(analysis.experiments) ||
+    !Array.isArray(analysis.outreach_drafts) ||
+    typeof analysis.discovery !== "object" ||
+    analysis.discovery === null ||
+    typeof analysis.overall_decision !== "object" ||
+    analysis.overall_decision === null
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export type Stage =
   | "discovery_identity"
   | "discovery_candidates"
