@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AnalysisView } from "@/components/analysis-view";
-import type { Analysis } from "@/lib/contracts";
+import type { Analysis, Criterion, Evidence } from "@/lib/contracts";
 
 const progress = new Map();
 
@@ -17,6 +17,7 @@ const emptyAnalysis = {
       seed_resolutions: [],
       selected_osm_place: null,
       selected_qloo_entity: null,
+      evidence: [],
       limitations: [],
     },
     candidate_checks: [],
@@ -43,6 +44,104 @@ const emptyAnalysis = {
   critic_text_status: "rule_based_unavailable",
   critic_text_note: null,
 } satisfies Analysis;
+
+function analysisWithCandidate(): Analysis {
+  const evidence: Evidence = {
+    source_type: "external",
+    source_reference: "verification:sample-id",
+    claim: "The Sample Partner listing is in Portland.",
+  };
+  const criterion: Criterion = {
+    assessment: "supported",
+    rationale: "The candidate's listed activity could suit the stated goal.",
+    evidence: [evidence],
+  };
+  const comparison = {
+    candidate: {
+      entity_id: "sample-partner-id",
+      name: "Sample Partner",
+      entity_type: "urn:entity:place",
+      evidence: [evidence],
+    },
+    role: "unexpected",
+    evidence_relevance: criterion,
+    taste_affinity: criterion,
+    complementarity: criterion,
+    competition: criterion,
+    geographic_logistical_suitability: criterion,
+    budget_compatibility: criterion,
+    goal_alignment: criterion,
+    uncertainty: criterion,
+    identity_verification: {
+      status: "verified",
+      location_relevance: "osm_same_city_unlinked",
+      verified_identity: true,
+      verified_location: true,
+      evidence: [evidence],
+      missing_evidence: ["Fees"],
+      freshness_limit: "The listing's current operating status is unknown.",
+    },
+  } satisfies Analysis["candidate_decisions"][number]["candidate"];
+  const decision = {
+    candidate: comparison,
+    provisional_rating: "WORTH TESTING",
+    final_rating: "WORTH TESTING",
+    rationale: "The available evidence supports a cautious test, not a forecast.",
+    downgrade_causes: ["single_source_taste_signal"],
+    criticisms: [
+      {
+        code: "verification_unverified",
+        issue: "The listing cannot be linked to the Qloo entity.",
+        evidence: [],
+        supporting_evidence_references: ["verification:sample-id", "brief:constraints:0"],
+        severity: "medium",
+        resolvable: true,
+        effect_on_recommendation: "Confirm identity before proceeding.",
+      },
+    ],
+  } satisfies Analysis["candidate_decisions"][number];
+  return {
+    ...emptyAnalysis,
+    discovery: {
+      ...emptyAnalysis.discovery,
+      status: "complete",
+      unexpected_candidates: [comparison],
+    },
+    candidate_decisions: [decision],
+    overall_decision: {
+      result: "WORTH TESTING",
+      selected_entity_id: "sample-partner-id",
+      selected_candidate_name: "Sample Partner",
+      rationale: "The candidate has evidence for a low-risk test.",
+      evidence_references: ["verification:sample-id"],
+    },
+    experiments: [
+      {
+        candidate_name: "Sample Partner",
+        title: "Partner feasibility test",
+        description: "A focused pilot for the Portland pop-up goal.",
+        budget: null,
+        success_criteria: ["Confirm the format and terms."],
+        duration_days: 2,
+        test_format: "Two-day pop-up, as required in the brief.",
+        event_structure: ["Agree on the event details."],
+        costs_to_verify: ["Partner fees"],
+        assumptions: [],
+        risks: [],
+        next_step: "Confirm fees before committing.",
+      },
+    ],
+    outreach_drafts: [
+      {
+        recipient_name: "Sample Partner",
+        subject: "Collaboration in Portland",
+        body: "Hello Sample Partner team, Portland; goal: community pop-up.",
+        channel: "email",
+        facts_not_verified: ["Fees"],
+      },
+    ],
+  };
+}
 
 describe("AnalysisView states", () => {
   it("shows real stage progress while loading", () => {
@@ -89,5 +188,71 @@ describe("AnalysisView states", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("Qloo credentials are not configured.");
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("resolves claim text, hides unresolved references, and collapses details by default", () => {
+    render(
+      <AnalysisView
+        analysis={analysisWithCandidate()}
+        error={null}
+        progress={progress}
+        state="results"
+      />,
+    );
+
+    expect(screen.getAllByText("The Sample Partner listing is in Portland.").length)
+      .toBeGreaterThan(0);
+    expect(screen.queryByText("The cited source is identified, but no claim text was returned."))
+      .not.toBeInTheDocument();
+    expect(screen.queryByText("verification:sample-id")).not.toBeInTheDocument();
+    expect(screen.queryByText("brief:constraints:0")).not.toBeInTheDocument();
+    expect(screen.queryByText("urn:entity:place")).not.toBeInTheDocument();
+    expect(screen.getAllByText("External").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("WORTH TESTING").length).toBeGreaterThan(0);
+    expect(screen.getByText("The available evidence supports a cautious test, not a forecast."))
+      .toBeInTheDocument();
+    expect(
+      screen.getByText("The taste signal lacks independent corroboration"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Critic details (1)").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("Evidence by criterion").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("Experiment for Sample Partner: Partner feasibility test"))
+      .toBeInTheDocument();
+    expect(screen.getByText("Outreach draft for Sample Partner")).toBeInTheDocument();
+    expect(screen.getByLabelText("Editable outreach draft")).toHaveValue(
+      "Collaboration in Portland\n\nHello Sample Partner team, Portland; goal: community pop-up.",
+    );
+    expect(screen.getByText(/Not verified: Fees/)).toBeInTheDocument();
+  });
+
+  it("keeps the cannot-verify skip reason visible", () => {
+    const analysis = analysisWithCandidate();
+    const decision = analysis.candidate_decisions[0];
+    const skipped = {
+      ...analysis,
+      candidate_decisions: [
+        {
+          ...decision,
+          candidate: {
+            ...decision.candidate,
+            identity_verification: {
+              ...decision.candidate.identity_verification,
+              status: "unverified",
+            },
+          },
+          final_rating: "SKIP" as const,
+          downgrade_causes: ["verification_unverified"],
+        },
+      ],
+      overall_decision: {
+        ...analysis.overall_decision,
+        result: "SKIP" as const,
+      },
+    } satisfies Analysis;
+    render(
+      <AnalysisView analysis={skipped} error={null} progress={progress} state="results" />,
+    );
+
+    expect(screen.getByText("Skipped: couldn't verify")).toBeInTheDocument();
   });
 });

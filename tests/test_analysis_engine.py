@@ -503,7 +503,10 @@ def test_experiment_and_outreach_are_created_only_for_eligible_ratings() -> None
             linkage="verified",
         )
         try:
-            return await engine.analyze(_discovery([eligible]), _brief())
+            brief = _brief().model_copy(
+                update={"event_requirements": ["Two-day pop-up", "Table space provided"]}
+            )
+            return await engine.analyze(_discovery([eligible]), brief)
         finally:
             await client.aclose()
 
@@ -511,8 +514,18 @@ def test_experiment_and_outreach_are_created_only_for_eligible_ratings() -> None
     assert result.candidate_decisions[0].final_rating == "WORTH TESTING"
     assert len(result.experiments) == 1
     assert len(result.outreach_drafts) == 1
+    assert result.experiments[0].candidate_name == FIXTURE_NAME
+    assert result.experiments[0].duration_days == 2
+    assert "Two-day pop-up" in result.experiments[0].test_format
     assert all(
         "Suggested target:" in item for item in result.experiments[0].success_criteria
     )
     assert result.experiments[0].costs_to_verify
     assert result.outreach_drafts[0].facts_not_verified
+    draft = result.outreach_drafts[0]
+    assert draft.recipient_name == FIXTURE_NAME
+    assert f"Hello {FIXTURE_NAME} team" in draft.body
+    assert "Portland" in draft.body
+    assert "Host a small community pop-up" in draft.body
+    assert "Synthetic evidence only." in draft.body
+    assert "qloo" not in draft.body.casefold()

@@ -84,11 +84,12 @@ export interface CandidateDecision {
 }
 
 export interface Experiment {
+  candidate_name: string;
   title: string;
   description: string;
   budget: { minimum: number; maximum: number; currency: string } | null;
   success_criteria: string[];
-  duration_days: number;
+  duration_days: number | null;
   test_format: string;
   event_structure: string[];
   costs_to_verify: string[];
@@ -121,6 +122,7 @@ export interface BusinessIdentity {
   seed_resolutions: SeedResolution[];
   selected_osm_place: Place | null;
   selected_qloo_entity: Candidate | null;
+  evidence: Evidence[];
   limitations: string[];
 }
 

@@ -34,6 +34,61 @@ logger = logging.getLogger("vyuha.discovery")
 _MAX_CANDIDATES_TO_VERIFY = 5
 _OUTPUT_TYPE = "urn:entity:place"
 _SEED_TYPE = "urn:entity:brand"
+_OSM_ADDRESS_CONTEXT_KEYS = {
+    "city",
+    "city_district",
+    "country",
+    "country_code",
+    "county",
+    "district",
+    "hamlet",
+    "house_number",
+    "municipality",
+    "neighbourhood",
+    "pedestrian",
+    "postcode",
+    "quarter",
+    "region",
+    "road",
+    "state",
+    "state_district",
+    "street",
+    "suburb",
+    "town",
+    "village",
+}
+
+
+def _osm_location_context_names(place: OSMPlace) -> set[str]:
+    excluded_parts = {
+        normalize_text(value)
+        for key, value in place.address.items()
+        if key in _OSM_ADDRESS_CONTEXT_KEYS
+    }
+    names = {
+        normalize_text(part)
+        for part in place.display_name.split(",")
+        if normalize_text(part)
+        and not normalize_text(part).isdigit()
+        and normalize_text(part) not in excluded_parts
+    }
+    names.update(
+        normalize_text(value)
+        for key, value in place.address.items()
+        if key not in _OSM_ADDRESS_CONTEXT_KEYS and normalize_text(value)
+    )
+    names.discard(normalize_text(place.name or ""))
+    return names
+
+
+def _matches_location_context_name(candidate_name: str, context_names: set[str]) -> bool:
+    normalized_candidate = normalize_text(candidate_name)
+    padded_candidate = f" {normalized_candidate} "
+    return any(
+        f" {context_name} " in padded_candidate
+        for context_name in context_names
+        if len(context_name) >= 5
+    )
 
 
 class _State(TypedDict, total=False):
@@ -620,6 +675,34 @@ class DiscoveryPipeline:
         candidates_by_seed: list[list[Candidate]] = []
         skipped_low = 0
         skipped_unknown = 0
+        seed_entity_ids = {entity.entity_id for _, entity in seeds}
+        if identity.selected_qloo_entity:
+            seed_entity_ids.add(identity.selected_qloo_entity.entity_id)
+        excluded_seed_names = {
+            normalize_text(name)
+            for name in [
+                state["request"].brief.business_name,
+                *(entity.name for _, entity in seeds),
+                *(
+                    [identity.selected_qloo_entity.name]
+                    if identity.selected_qloo_entity
+                    else []
+                ),
+                *(
+                    [identity.selected_osm_place.name]
+                    if identity.selected_osm_place and identity.selected_osm_place.name
+                    else []
+                ),
+            ]
+        }
+        location_context_names = (
+            _osm_location_context_names(identity.selected_osm_place)
+            if identity.selected_osm_place is not None
+            else set()
+        )
+        excluded_seed_names.update(location_context_names)
+        excluded_seed_names.discard(normalize_text(state["request"].brief.city or ""))
+        excluded_seed_names.discard(normalize_text(state["request"].brief.target_market or ""))
         for seed_name, seed_entity in seeds:
             try:
                 returned = (
@@ -640,10 +723,11 @@ class DiscoveryPipeline:
             seed_candidates: list[Candidate] = []
             for candidate in returned:
                 candidate_name = normalize_text(candidate.name)
-                if candidate.entity_id == seed_entity.entity_id or candidate_name in {
-                    normalize_text(seed_entity.name),
-                    normalize_text(state["request"].brief.business_name),
-                }:
+                if (
+                    candidate.entity_id in seed_entity_ids
+                    or candidate_name in excluded_seed_names
+                    or _matches_location_context_name(candidate_name, location_context_names)
+                ):
                     continue
                 score = candidate.affinity_score
                 if score is None:
@@ -700,7 +784,7 @@ class DiscoveryPipeline:
                 if previous is None:
                     merged[candidate.entity_id] = candidate
                     continue
-                seed_names = list(
+                merged_seed_names = list(
                     dict.fromkeys(previous.source_seed_names + candidate.source_seed_names)
                 )
                 affinities = previous.seed_affinities + [
@@ -710,9 +794,13 @@ class DiscoveryPipeline:
                 ]
                 merged[candidate.entity_id] = previous.model_copy(
                     update={
-                        "source_seed_names": seed_names,
+                        "source_seed_names": merged_seed_names,
                         "seed_affinities": affinities,
-                        "affinity_score": None if len(seed_names) > 1 else previous.affinity_score,
+                        "affinity_score": (
+                            None
+                            if len(merged_seed_names) > 1
+                            else previous.affinity_score
+                        ),
                         "evidence": previous.evidence + candidate.evidence,
                     }
                 )
@@ -736,11 +824,16 @@ class DiscoveryPipeline:
 
     async def _stage_c(self, state: _State) -> dict[str, object]:
         request = state["request"]
+        identity = state["identity"]
         market = request.brief.city or request.brief.target_market
         if market is None:
             raise RuntimeError("Validated business brief has no target market.")
         checks: list[CandidateCheck] = []
         issues = list(state.get("stage_issues", []))
+        selected_place = identity.selected_osm_place
+        selected_osm_identity = (
+            (selected_place.osm_type, selected_place.osm_id) if selected_place else None
+        )
         for candidate in state.get("qloo_candidates", []):
             try:
                 search_results = await self._verifier.search(candidate.name, market)
@@ -765,6 +858,14 @@ class DiscoveryPipeline:
 
             exact = self._verifier.exact_name_matches(candidate.name, search_results)
             local = self._verifier.local_matches(market, exact)
+            if selected_osm_identity is not None and any(
+                (place.osm_type, place.osm_id) == selected_osm_identity
+                for place in search_results
+            ):
+                issues.append(
+                    f"Excluded {candidate.name!r}: its OSM result is the selected business listing."
+                )
+                continue
             if len(local) == 1:
                 place = local[0]
                 candidate = candidate.model_copy(
@@ -846,19 +947,54 @@ class DiscoveryPipeline:
                     f"{exc.public_message}"
                 )
             else:
+                selected_place = identity.selected_osm_place
                 existing_ids = {
                     (place.osm_type, place.osm_id)
                     for check in checks
                     for place in check.place_matches
                 }
+                if selected_place is not None:
+                    existing_ids.add((selected_place.osm_type, selected_place.osm_id))
+                own_names = {
+                    normalize_text(request.brief.business_name),
+                    *(
+                        [normalize_text(selected_place.name)]
+                        if selected_place and selected_place.name
+                        else []
+                    ),
+                    *(
+                        [normalize_text(identity.selected_qloo_entity.name)]
+                        if identity.selected_qloo_entity
+                        else []
+                    ),
+                    *(
+                        [
+                            normalize_text(resolution.selected_entity.name)
+                            for resolution in identity.seed_resolutions
+                            if resolution.selected_entity
+                        ]
+                    ),
+                }
+                location_context_names = (
+                    _osm_location_context_names(selected_place)
+                    if selected_place is not None
+                    else set()
+                )
+                own_names.update(location_context_names)
+                own_names.discard(normalize_text(request.brief.city or ""))
+                own_names.discard(normalize_text(request.brief.target_market or ""))
                 baseline_count = 0
                 for place in self._verifier.local_matches(market, category_results):
                     if not self._matches_category(place, industry):
                         continue
-                    identity = (place.osm_type, place.osm_id)
-                    if identity in existing_ids:
+                    place_identity = (place.osm_type, place.osm_id)
+                    if place_identity in existing_ids or normalize_text(
+                        place.name or place.display_name
+                    ) in own_names or _matches_location_context_name(
+                        place.name or place.display_name, location_context_names
+                    ):
                         continue
-                    existing_ids.add(identity)
+                    existing_ids.add(place_identity)
                     candidate = Candidate(
                         entity_id=f"osm:{place.osm_type}/{place.osm_id}",
                         name=place.name or place.display_name[:500],
@@ -1319,6 +1455,13 @@ class DiscoveryPipeline:
             local_rationale = check.verification_message or (
                 "Location relevance is unverified; no exact-name local OSM record is available."
             )
+        location_labels = {
+            "osm_same_city_unlinked": "same-city listing found; Qloo linkage unverified",
+            "osm_category_verified": "same-city category listing found",
+            "qloo_same_city_unverified": "Qloo reports the same city; map verification is missing",
+            "out_of_market": "outside the requested market",
+            "unverified": "not verified",
+        }
         evidence_rationale = (
             "Qloo returned this entity for user-supplied seed(s) "
             f"{', '.join(candidate.source_seed_names)}; this is not evidence about the user's "
@@ -1353,8 +1496,8 @@ class DiscoveryPipeline:
                 assessment="partial" if match else "unknown",
                 rationale=(
                     local_rationale
-                    + " Location relevance label: "
-                    + check.location_relevance
+                        + " Location check: "
+                        + location_labels[check.location_relevance]
                     + ". Listing presence does not confirm current operation, event availability, "
                     "permits, accessibility, or logistical feasibility."
                 ),

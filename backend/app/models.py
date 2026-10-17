@@ -144,11 +144,12 @@ class Decision(StrictModel):
 
 
 class Experiment(StrictModel):
+    candidate_name: str = Field(min_length=1, max_length=500)
     title: str = Field(min_length=1, max_length=160)
     description: str = Field(min_length=1, max_length=2_000)
     budget: BudgetRange | None = None
     success_criteria: list[str] = Field(min_length=1, max_length=20)
-    duration_days: int = Field(ge=1, le=90)
+    duration_days: int | None = Field(default=None, ge=1, le=90)
     test_format: str = Field(min_length=1, max_length=500)
     event_structure: list[str] = Field(default_factory=list, max_length=20)
     costs_to_verify: list[str] = Field(min_length=1, max_length=20)

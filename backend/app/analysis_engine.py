@@ -49,6 +49,20 @@ _CODE = Literal[
     "no_positive_taste_signal",
     "outside_market",
 ]
+_FINDING_LABELS: dict[str, str] = {
+    "affinity_not_outcome_evidence": "taste affinity is not outcome evidence",
+    "brief_constraints_unchecked": "brief constraints are not verified",
+    "commercial_logistics_missing": "commercial logistics remain unknown",
+    "conventional_baseline_stronger": "the conventional alternative is better supported",
+    "cross_source_linkage_unverified": "Qloo and map records are not linked",
+    "large_radius_locality": "the search radius does not establish city-level fit",
+    "no_conventional_baseline": "no conventional alternative was found",
+    "no_positive_taste_signal": "no positive taste signal was available",
+    "outside_market": "the candidate is outside the requested market",
+    "seed_derived_signal": "the signal came from supplied seed brands",
+    "single_source_taste_signal": "the taste signal lacks independent corroboration",
+    "verification_unverified": "independent identity or location verification is incomplete",
+}
 _FORBIDDEN_CLAIM = re.compile(
     r"\b(?:customer\s+overlap|audience\s+overlap|demographic(?:s|ally)?|"
     r"customers?\s+(?:share|overlap|will|are)|shared\s+customers?)\b",
@@ -704,7 +718,8 @@ def _decision_rationale(
         )
     return (
         f"Downgraded from {provisional} to {final} by these critic findings: "
-        f"{', '.join(causes)}. The decision uses the brief's market "
+        f"{', '.join(_FINDING_LABELS.get(cause, cause.replace('_', ' ')) for cause in causes)}. "
+        f"The decision uses the brief's market "
         f"{brief.city or brief.target_market!r} "
         f"and candidate role {comparison.role}; it is not a probability or business forecast."
     )
@@ -756,34 +771,52 @@ def _overall_decision(
 
 
 def _make_experiment(decision: CandidateDecision, brief: BusinessBrief) -> Experiment:
+    comparison = decision.candidate
+    candidate_name = comparison.candidate.name
     local_name = brief.city or brief.target_market or "the requested market"
+    requirements = brief.event_requirements
+    requirement_text = "; ".join(requirements) or "No event format or duration was specified."
+    duration_days = _duration_days(requirements)
+    duration_text = (
+        f"Use the brief's stated duration of {duration_days} day(s)."
+        if duration_days is not None
+        else "Confirm the event duration with the candidate; the brief does not specify it."
+    )
+    rationale = _partner_rationale(comparison)
+    format_text = (
+        f"Pilot format for {brief.collaboration_goal} in {local_name}. "
+        f"Apply the brief's event requirements: {requirement_text} {duration_text}"
+    )
+    event_structure = [
+        f"Agree a format with {candidate_name} that serves this goal: "
+        f"{brief.collaboration_goal}",
+        f"Confirm the stated event requirements: {requirement_text}",
+        duration_text,
+        *[f"Honor this brief constraint: {constraint}" for constraint in brief.constraints],
+        "Record observed outcomes only; do not forecast attendance, conversion, or revenue.",
+    ]
     return Experiment(
-        title="Low-cost partner feasibility test",
+        candidate_name=candidate_name,
+        title="Partner feasibility test",
         description=(
-            "Before committing funds, ask the candidate whether a small, one-day "
-            f"collaboration aligned with this goal is feasible: {brief.collaboration_goal}"
-        ),
+            f"Before committing funds, ask {candidate_name} whether a low-cost collaboration "
+            f"in {local_name} is feasible for this goal: {brief.collaboration_goal} "
+            f"Potential collaboration angle to test: {rationale}"
+        )[:2_000],
         budget=None,
         success_criteria=[
-            "Suggested target: candidate confirms identity and a local point of contact.",
-            "Suggested target: both parties agree in writing on date, roles, costs, and "
+            f"Suggested target: {candidate_name} confirms identity and a local point of contact.",
+            "Suggested target: both parties agree in writing on dates, roles, costs, and "
             "permissions.",
-            "Suggested target: a small pilot format fits the brief's stated constraints.",
+            "Suggested target: the agreed pilot format and duration meet the brief's "
+            "requirements and constraints.",
         ],
-        duration_days=1,
-        test_format=(
-            "A one-day pilot only after identity, costs, availability, and permissions "
-            "are verified."
-        ),
-        event_structure=[
-            f"Confirm the candidate operates at the proposed location in {local_name}.",
-            "Agree on a date, responsibilities, access requirements, and any fees before "
-            "promotion.",
-            "Run a small test and record observed results; do not forecast attendance or revenue.",
-        ],
+        duration_days=duration_days,
+        test_format=format_text[:500],
+        event_structure=event_structure[:20],
         costs_to_verify=[
-            "Venue or partner fees",
-            "Staffing, equipment, permits, insurance, and transport costs",
+            f"Any venue or partner fees charged by {candidate_name}",
+            "Staffing, equipment, permits, insurance, and transport costs for the agreed format",
             (
                 f"Whether total verified costs fit the brief's {brief.budget_range.currency} "
                 "budget range"
@@ -798,29 +831,59 @@ def _make_experiment(decision: CandidateDecision, brief: BusinessBrief) -> Exper
             "Qloo affinity is not evidence of shared customers or commercial success.",
         ],
         next_step=(
-            "Verify the candidate identity and ask for availability, fees, and event requirements "
-            "before spending or making a commitment."
+            f"Verify {candidate_name}'s identity and ask about availability, fees, and the "
+            "brief-specific event requirements before spending or making a commitment."
         ),
     )
 
 
+def _duration_days(requirements: list[str]) -> int | None:
+    duration_words = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+    }
+    for requirement in requirements:
+        match = re.search(
+            r"\b(?P<duration>\d{1,2}|one|two|three|four|five|six|seven)"
+            r"\s*[- ]?\s*days?\b",
+            requirement,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            value = match.group("duration").casefold()
+            days = duration_words[value] if value in duration_words else int(value)
+            if 1 <= days <= 90:
+                return days
+    return None
+
+
+def _partner_rationale(comparison: CandidateComparison) -> str:
+    rationale = comparison.complementarity.rationale.strip()
+    rationale = re.sub(r"^AI interpretation:\s*", "", rationale, flags=re.I)
+    rationale = re.split(r"\s+Uncertainties:\s*", rationale, maxsplit=1, flags=re.I)[0]
+    return re.sub(r"\bQloo(?:'s)?\b", "the available evidence", rationale, flags=re.I)
+
+
 def _make_outreach(decision: CandidateDecision, brief: BusinessBrief) -> OutreachDraft:
-    candidate = decision.candidate.candidate
+    comparison = decision.candidate
+    candidate = comparison.candidate
     market = brief.city or brief.target_market or "the requested market"
-    reason = (
-        "Qloo returned a place result for the selected user-supplied seed brand(s). "
-        "This is only a lead to check, not evidence about your business's customers."
-        if candidate.discovery_basis == "user_supplied_seeds"
-        else "Qloo returned a place result for the resolved business-brand query."
-    )
+    rationale = _partner_rationale(comparison)
     return OutreachDraft(
         recipient_name=candidate.name,
-        subject=f"Question about a possible small collaboration in {market}",
+        subject=f"{candidate.name}: collaboration idea in {market}",
         body=(
-            f"Hello,\n\nI'm exploring a small collaboration in {market} around this goal: "
-            f"{brief.collaboration_goal}\n\n{reason} I have not verified that the Qloo result "
-            "and any map listing refer to your organization, or confirmed your current "
-            "operations, availability, costs, permissions, or interest. Would you be the right "
+            f"Hello {candidate.name} team,\n\nI'm exploring a small collaboration with "
+            f"{candidate.name} in {market} around this goal: {brief.collaboration_goal}\n\n"
+            f"One possible collaboration angle to explore is: {rationale}\n\n"
+            "I have not verified that discovery records refer to your organization, or "
+            "confirmed your current operations, availability, costs, permissions, or interest. "
+            "Would you be the right "
             "person to confirm those details and discuss whether a small pilot could make "
             "sense?\n\n"
             "Nothing has been scheduled or committed. This is an unsent draft; Vyuha has not "

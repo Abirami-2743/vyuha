@@ -4,6 +4,7 @@ import { useState } from "react";
 import type {
   Analysis,
   CandidateDecision,
+  Criterion,
   Criticism,
   Evidence,
   Provenance,
@@ -49,21 +50,85 @@ function RatingBadge({ rating }: { rating: string }) {
   );
 }
 
-function referenceEvidence(criticism: Criticism): Evidence[] {
-  if (criticism.evidence.length) return criticism.evidence;
-  return criticism.supporting_evidence_references.map((source_reference) => ({
-    source_reference,
-    source_type: "unknown" as Provenance,
-    claim: "The cited source is identified, but no claim text was returned.",
-  }));
+function isCriterion(value: unknown): value is Criterion {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "evidence" in value &&
+    Array.isArray(value.evidence)
+  );
+}
+
+function evidenceIndex(analysis: Analysis): Map<string, Evidence> {
+  const entries: Evidence[] = [
+    ...analysis.discovery.business_identity.evidence,
+    ...analysis.discovery.candidate_checks.flatMap((check) => check.evidence),
+    ...analysis.candidate_decisions.flatMap((decision) => {
+      const comparison = decision.candidate;
+      const criterionEvidence = criteria.flatMap(([key]) => {
+        const criterion = comparison[key];
+        return isCriterion(criterion) ? criterion.evidence : [];
+      });
+      return [
+        ...(comparison.candidate.evidence ?? []),
+        ...comparison.identity_verification.evidence,
+        ...criterionEvidence,
+        ...decision.criticisms.flatMap((criticism) => criticism.evidence),
+      ];
+    }),
+    ...analysis.global_criticisms.flatMap((criticism) => criticism.evidence),
+  ];
+  return new Map(
+    entries
+      .filter((entry) => entry.claim.trim().length > 0)
+      .map((entry) => [entry.source_reference, entry]),
+  );
+}
+
+function referenceEvidence(
+  criticism: Criticism,
+  indexedEvidence: Map<string, Evidence>,
+): Evidence[] {
+  return criticism.supporting_evidence_references.flatMap((reference) => {
+    const entry = indexedEvidence.get(reference);
+    return entry ? [entry] : [];
+  });
+}
+
+function readableCause(cause: string): string {
+  const labels: Record<string, string> = {
+    affinity_not_outcome_evidence: "Taste affinity is not a commercial outcome",
+    brief_constraints_unchecked: "Brief constraints remain unchecked",
+    commercial_logistics_missing: "Commercial logistics are unverified",
+    conventional_baseline_stronger: "The conventional alternative is better supported",
+    cross_source_linkage_unverified: "Qloo and map records are not linked",
+    large_radius_locality: "The search radius does not establish city-level fit",
+    no_conventional_baseline: "No conventional alternative was verified",
+    no_positive_taste_signal: "No positive taste signal was available",
+    outside_market: "The candidate is outside the requested market",
+    seed_derived_signal: "The result came from supplied seed brands",
+    single_source_taste_signal: "The taste signal lacks independent corroboration",
+    verification_unverified: "Independent identity or location verification is incomplete",
+  };
+  return labels[cause] ?? cause.replaceAll("_", " ");
+}
+
+function readableEntityType(value: string): string {
+  const parts = value.split(":").filter(Boolean);
+  const label = parts[parts.length - 1] || value;
+  if (label === "entity") return "Business or place";
+  const readable = label.replaceAll("_", " ");
+  return `${readable.charAt(0).toUpperCase()}${readable.slice(1)}`;
 }
 
 function CandidateCard({
   item,
   baselineWithoutTaste,
+  indexedEvidence,
 }: {
   item: CandidateDecision;
   baselineWithoutTaste: boolean;
+  indexedEvidence: Map<string, Evidence>;
 }) {
   const comparison = item.candidate;
   const nameSource: Provenance =
@@ -91,8 +156,10 @@ function CandidateCard({
           </div>
           <h3 className="text-xl font-bold tracking-tight">{comparison.candidate.name}</h3>
           <p className="mt-1 text-xs text-slate-600">
-            {comparison.candidate.entity_type}
-            {comparison.candidate.subtype ? ` · ${comparison.candidate.subtype}` : ""}
+            {readableEntityType(comparison.candidate.entity_type)}
+            {comparison.candidate.subtype
+              ? ` · ${readableEntityType(comparison.candidate.subtype)}`
+              : ""}
           </p>
         </div>
         <RatingBadge rating={item.final_rating} />
@@ -123,17 +190,21 @@ function CandidateCard({
         <h4 className="font-semibold">Decision rationale</h4>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <SourceTag source="ai_interpretation" />
+          <p
+            className="line-clamp-1 text-sm leading-6 text-slate-700"
+            title={item.rationale}
+          >
+            {item.rationale}
+          </p>
           {item.final_rating === "SKIP" &&
-          comparison.identity_verification.status !== "verified" ? (
+          comparison.identity_verification.status !== "verified" && (
             <span className="text-sm font-semibold text-slate-800">Skipped: couldn&apos;t verify</span>
-          ) : (
-            <p className="text-sm leading-6 text-slate-700">{item.rationale}</p>
           )}
         </div>
         {item.downgrade_causes.length > 0 && (
           <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-slate-700">
             {item.downgrade_causes.map((cause) => (
-              <li key={cause}>{cause}</li>
+              <li key={cause}>{readableCause(cause)}</li>
             ))}
           </ul>
         )}
@@ -145,8 +216,10 @@ function CandidateCard({
         </p>
       )}
 
-      <section className="mt-5 border-t border-line pt-4">
-        <h4 className="font-semibold">What the critic changed and why</h4>
+      <details className="mt-5 border-t border-line pt-4">
+        <summary className="cursor-pointer font-semibold">
+          Critic details ({item.criticisms.length})
+        </summary>
         {item.criticisms.length ? (
           <ul className="mt-3 space-y-3">
             {item.criticisms.map((criticism, index) => (
@@ -170,7 +243,7 @@ function CandidateCard({
                   Effect on recommendation: {criticism.effect_on_recommendation}
                 </p>
                 <div className="mt-3 space-y-3">
-                  {referenceEvidence(criticism).map((entry, evidenceIndex) => (
+                  {referenceEvidence(criticism, indexedEvidence).map((entry, evidenceIndex) => (
                     <EvidenceLine
                       evidence={entry}
                       key={`${entry.source_reference}-${evidenceIndex}`}
@@ -185,10 +258,10 @@ function CandidateCard({
             No candidate-specific criticism was returned.
           </p>
         )}
-      </section>
+      </details>
 
-      <section className="mt-5 border-t border-line pt-4">
-        <h4 className="font-semibold">Evidence by criterion</h4>
+      <details className="mt-5 border-t border-line pt-4">
+        <summary className="cursor-pointer font-semibold">Evidence by criterion</summary>
         <ul className="mt-3 space-y-3">
           {criteria.map(([key, label]) => {
             const criterion = comparison[key];
@@ -225,7 +298,7 @@ function CandidateCard({
             );
           })}
         </ul>
-      </section>
+      </details>
 
       {comparison.identity_verification.missing_evidence.length > 0 && (
         <p className="mt-4 text-sm leading-6 text-slate-700">
@@ -335,6 +408,7 @@ export function AnalysisView({
   });
   const partial = state === "partial" || analysis.discovery.status === "partial";
   const outreach = analysis.outreach_drafts[0];
+  const indexedEvidence = evidenceIndex(analysis);
   const activeDraft = draft ?? (outreach ? `${outreach.subject}\n\n${outreach.body}` : "");
 
   return (
@@ -391,6 +465,7 @@ export function AnalysisView({
                 item.candidate.role === "conventional_baseline" && baselineWithoutTaste
               }
               item={item}
+              indexedEvidence={indexedEvidence}
               key={item.candidate.candidate.entity_id}
             />
           ))}
@@ -398,8 +473,10 @@ export function AnalysisView({
       </section>
 
       {analysis.global_criticisms.length > 0 && (
-        <section className="rounded-xl border border-line bg-white p-5">
-          <h2 className="text-xl font-bold">Evidence limits across the comparison</h2>
+        <details className="rounded-xl border border-line bg-white p-5">
+          <summary className="cursor-pointer text-xl font-bold">
+            Evidence limits across the comparison ({analysis.global_criticisms.length})
+          </summary>
           <ul className="mt-4 space-y-4">
             {analysis.global_criticisms.map((criticism, index) => (
               <li className="border-t border-line pt-4" key={`${criticism.code}-${index}`}>
@@ -410,7 +487,7 @@ export function AnalysisView({
                 <p className="mt-2 text-sm leading-6">{criticism.issue}</p>
                 <p className="mt-1 text-sm text-slate-600">{criticism.effect_on_recommendation}</p>
                 <div className="mt-3 space-y-3">
-                  {referenceEvidence(criticism).map((entry, evidenceIndex) => (
+                  {referenceEvidence(criticism, indexedEvidence).map((entry, evidenceIndex) => (
                     <EvidenceLine
                       evidence={entry}
                       key={`${entry.source_reference}-${evidenceIndex}`}
@@ -420,7 +497,7 @@ export function AnalysisView({
               </li>
             ))}
           </ul>
-        </section>
+        </details>
       )}
 
       <section className="grid gap-4 lg:grid-cols-2">
@@ -436,11 +513,26 @@ export function AnalysisView({
             <ul className="mt-4 space-y-5">
               {analysis.experiments.map((experiment, index) => (
                 <li className="border-t border-line pt-4" key={`${experiment.title}-${index}`}>
-                  <h3 className="font-semibold">{experiment.title}</h3>
+                  <h3 className="font-semibold">
+                    Experiment for {experiment.candidate_name}: {experiment.title}
+                  </h3>
                   <p className="mt-2 text-sm leading-6 text-slate-700">{experiment.description}</p>
                   <p className="mt-3 text-sm">
-                    Duration: {experiment.duration_days} day(s)
+                    Format: {experiment.test_format}
                   </p>
+                  <p className="mt-3 text-sm">
+                    Duration:{" "}
+                    {experiment.duration_days === null
+                      ? "Not specified in the brief; verify with the candidate."
+                      : `${experiment.duration_days} day(s), from the brief`}
+                  </p>
+                  {experiment.event_structure.length > 0 && (
+                    <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-6 text-slate-700">
+                      {experiment.event_structure.map((step) => (
+                        <li key={step}>{step}</li>
+                      ))}
+                    </ul>
+                  )}
                   <p className="mt-3 text-sm font-semibold">Costs to verify before commitment</p>
                   <ul className="mt-1 list-disc space-y-1 pl-5 text-sm leading-6 text-slate-700">
                     {experiment.costs_to_verify.map((cost) => (
@@ -469,7 +561,9 @@ export function AnalysisView({
 
         <article className="rounded-xl border border-line bg-white p-5">
           <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-xl font-bold">Outreach draft</h2>
+            <h2 className="text-xl font-bold">
+              Outreach draft{outreach?.recipient_name ? ` for ${outreach.recipient_name}` : ""}
+            </h2>
             <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold">
               Unsent draft
             </span>

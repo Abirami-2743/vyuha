@@ -227,6 +227,127 @@ def test_explicit_osm_choice_resolves_business_identity_and_continues() -> None:
     assert result.candidate_checks
 
 
+def test_blue_bottle_seed_identity_does_not_surface_ferry_building_as_partner() -> None:
+    seed_id = "blue-bottle-qloo-id"
+    qloo_search = {
+        "results": [
+            {
+                "entity_id": seed_id,
+                "name": "Blue Bottle Coffee",
+                "types": ["urn:entity:brand"],
+                "properties": {},
+            }
+        ]
+    }
+    qloo_insights = {
+        "results": {
+            "entities": [
+                {
+                    "entity_id": seed_id,
+                    "name": "Ferry Building",
+                    "type": "urn:entity",
+                    "subtype": "urn:entity:place",
+                    "query": {"affinity": 0.9},
+                    "properties": {},
+                },
+                {
+                    "entity_id": "ferry-building-place-id",
+                    "name": "Ferry Building",
+                    "type": "urn:entity",
+                    "subtype": "urn:entity:place",
+                    "query": {"affinity": 0.8},
+                    "properties": {},
+                },
+                {
+                    "entity_id": "selected-osm-alias-id",
+                    "name": "Selected Venue Alias",
+                    "type": "urn:entity",
+                    "subtype": "urn:entity:place",
+                    "query": {"affinity": 0.7},
+                    "properties": {},
+                },
+                {
+                    "entity_id": "blue-bottle-brand-duplicate-id",
+                    "name": "Blue Bottle Coffee",
+                    "type": "urn:entity",
+                    "subtype": "urn:entity:place",
+                    "query": {"affinity": 0.6},
+                    "properties": {},
+                },
+                {
+                    "entity_id": "ferry-building-business-id",
+                    "name": "Gott's SF Ferry Building",
+                    "type": "urn:entity",
+                    "subtype": "urn:entity:place",
+                    "query": {"affinity": 0.5},
+                    "properties": {},
+                },
+            ]
+        }
+    }
+
+    def place(name: str, osm_id: int) -> dict[str, object]:
+        return {
+            "osm_type": "node",
+            "osm_id": osm_id,
+            "name": name,
+            "display_name": (
+                f"{name}, 1, Ferry Building, San Francisco, California, 94111, United States"
+            ),
+            "category": "amenity",
+            "type": "cafe",
+            "lat": "37.7955",
+            "lon": "-122.3937",
+            "address": {"city": "San Francisco", "state": "California", "country": "USA"},
+        }
+
+    def nominatim_response(request: httpx.Request) -> httpx.Response:
+        query = request.url.params["q"]
+        if query == "Blue Bottle Coffee, San Francisco":
+            return httpx.Response(200, json=[place("Blue Bottle Coffee", 10)])
+        if query == "Ferry Building, San Francisco":
+            return httpx.Response(200, json=[place("Ferry Building", 11)])
+        if query == "Selected Venue Alias, San Francisco":
+            return httpx.Response(200, json=[place("Selected Venue Alias", 10)])
+        if query == "Gott's SF Ferry Building, San Francisco":
+            return httpx.Response(200, json=[place("Gott's SF Ferry Building", 12)])
+        if query == "cafe shops in San Francisco":
+            return httpx.Response(200, json=[place("Ferry Building", 10)])
+        return httpx.Response(200, json=[])
+
+    result = run(
+        run_pipeline(
+            {
+                "brief": {
+                    **brief(industry="cafe"),
+                    "business_name": "Blue Bottle Coffee",
+                    "city": "San Francisco",
+                    "identifying_info": "Blue Bottle Coffee in San Francisco",
+                },
+            },
+            nominatim_override=httpx.MockTransport(nominatim_response),
+            qloo_search_override=qloo_search,
+            qloo_insights_override=qloo_insights,
+        )
+    )
+
+    assert result.business_identity.selected_osm_place.name == "Blue Bottle Coffee"
+    assert all(item.candidate.name != "Ferry Building" for item in result.candidate_checks)
+    assert all(
+        "Ferry Building" not in item.candidate.name for item in result.candidate_checks
+    )
+    assert result.conventional_baseline is None
+    assert all(
+        "Ferry Building" not in item.candidate.name
+        for item in [
+            *result.unexpected_candidates,
+            *result.other_conventional_candidates,
+            *result.unclassified_candidates,
+            *result.out_of_market_candidates,
+        ]
+    )
+
+
 def test_non_exact_qloo_matches_require_choice_and_filter_excluded_types() -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         if request.url.host == "nominatim.openstreetmap.org":
