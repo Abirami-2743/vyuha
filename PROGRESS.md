@@ -18,7 +18,7 @@ Updated: October 17, 2026
 
 ## Verified
 
-- Qloo Search/Place Insights, Nominatim same-city category checks, and the 100-mile-radius caveat were verified. Earlier task notes describe tracked artifacts in `docs/live-samples/` as sanitized; their compliance with the no-public-Qloo-response rule still needs review before release.
+- Qloo Search/Place Insights, Nominatim same-city category checks, and the 100-mile-radius caveat were verified.
 - Blue Bottle Coffee / San Francisco sample completed in the browser after explicitly selecting the Ferry Building location. Live Qloo Search and Insights returned HTTP 200; the page displayed the response-derived candidate count, critic cuts, recommendation/rating and next step.
 - Browser fallback check: with the backend stopped and the page reloaded, the real sample request failed and the app loaded the private saved analysis with its capture date and “not live” banner. Identity selection remained user-controlled.
 - Backend CORS, daily/per-IP limiter unit test, and request validation are covered. The local saved-run file was confirmed ignored by Git.
@@ -30,7 +30,7 @@ Updated: October 17, 2026
 ## Blocked
 
 - No local implementation blocker. The saved fallback needs a private file available to the frontend runtime; Vercel and Render do not share a filesystem, so deployment must provide the file to the frontend service or use an approved private storage arrangement.
-- Existing tracked JSON artifacts in `docs/live-samples/` were not audited or changed in this task. Verify they contain no prohibited Qloo response data before making the repository public.
+- Raw API response samples were removed from the repository and its history; none are published.
 - The dependency advisories above remain unmodified.
 
 ## Next
