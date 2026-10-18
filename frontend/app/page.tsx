@@ -262,12 +262,16 @@ export default function Home() {
   const [analysisIsSaved, setAnalysisIsSaved] = useState(false);
   const [progress, setProgress] = useState<Map<string, ProgressEvent>>(new Map());
   const [loading, setLoading] = useState(false);
+  const [healthCheckWakingUp, setHealthCheckWakingUp] = useState(false);
+  const [analysisWakingUp, setAnalysisWakingUp] = useState(false);
   const [currentRequest, setCurrentRequest] = useState<DiscoveryRequest | null>(null);
   const analysisInFlight = useRef(false);
 
   const checkBackend = useCallback(async () => {
     setApiReady(null);
     setApiMessage("");
+    setHealthCheckWakingUp(false);
+    const wakingTimeoutId = window.setTimeout(() => setHealthCheckWakingUp(true), 5_000);
     try {
       await checkApi();
       setApiReady(true);
@@ -280,11 +284,16 @@ export default function Home() {
             ? error.message
             : "Backend health check could not be completed.",
       );
+    } finally {
+      window.clearTimeout(wakingTimeoutId);
+      setHealthCheckWakingUp(false);
     }
   }, []);
 
   useEffect(() => {
-    if (screen === "landing") void checkBackend();
+    if (screen !== "landing") return;
+    const checkTimerId = window.setTimeout(() => void checkBackend(), 0);
+    return () => window.clearTimeout(checkTimerId);
   }, [screen, checkBackend]);
 
   useEffect(() => {
@@ -318,14 +327,18 @@ export default function Home() {
     setAnalysisError(null);
     setAnalysisIsSaved(false);
     setProgress(new Map());
+    setAnalysisWakingUp(false);
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 240_000);
+    const wakingTimeoutId = window.setTimeout(() => setAnalysisWakingUp(true), 5_000);
 
     try {
       let receivedResult = false;
       await analyze(
         request,
         (event: StageEvent) => {
+          window.clearTimeout(wakingTimeoutId);
+          setAnalysisWakingUp(false);
           setProgress((current) => {
             const next = new Map(current);
             next.set(event.stage, { status: event.status, message: event.message });
@@ -334,14 +347,6 @@ export default function Home() {
           if (event.status === "failed") throw new Error(event.message);
           if (event.result) {
             setAnalysis(event.result);
-            if (event.result.discovery.status !== "needs_user_choice") {
-              const run = { captured_at: new Date().toISOString(), analysis: event.result };
-              setSavedRun((current) =>
-                current && Date.parse(current.captured_at) > Date.parse(run.captured_at)
-                  ? current
-                  : run,
-              );
-            }
             receivedResult = true;
           }
         },
@@ -382,6 +387,8 @@ export default function Home() {
       }
     } finally {
       window.clearTimeout(timeoutId);
+      window.clearTimeout(wakingTimeoutId);
+      setAnalysisWakingUp(false);
       analysisInFlight.current = false;
       setLoading(false);
     }
@@ -562,6 +569,20 @@ export default function Home() {
             >
               Start your own brief
             </button>
+            {savedRun && (
+              <button
+                className="rounded-lg border border-line bg-white px-6 py-3 font-semibold text-forest hover:bg-paper"
+                onClick={() => {
+                  setAnalysis(savedRun.analysis);
+                  setAnalysisError(null);
+                  setAnalysisIsSaved(true);
+                  setScreen("analysis");
+                }}
+                type="button"
+              >
+                View a saved run
+              </button>
+            )}
           </div>
 
           <ol className="mt-16 grid gap-4 border-t border-line pt-7 sm:grid-cols-2 lg:grid-cols-4">
@@ -582,7 +603,9 @@ export default function Home() {
           <div aria-live="polite" className="mt-12 flex flex-wrap items-center gap-3 text-sm">
             {apiReady === null ? (
               <span className="text-slate-600">
-                Waking up the server; free hosted instances can take up to a minute. Checking the live connection…
+                {healthCheckWakingUp
+                  ? "Waking up the server; free hosted instances can take up to a minute."
+                  : "Checking the live connection…"}
               </span>
             ) : apiReady ? (
               <span className="font-semibold text-forest">Backend connected</span>
@@ -793,7 +816,7 @@ export default function Home() {
               <p className="font-bold">
                 Saved run from {new Date(savedRun.captured_at).toLocaleString()}, not live.
               </p>
-              <p>Live analysis unavailable: {analysisError}</p>
+              {analysisError && <p>Live analysis unavailable: {analysisError}</p>}
             </div>
           )}
           <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
@@ -837,6 +860,7 @@ export default function Home() {
               progress={progress}
               state={viewState}
               isSavedRun={analysisIsSaved}
+              wakingUp={analysisWakingUp}
             />
           )}
         </section>

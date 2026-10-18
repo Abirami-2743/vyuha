@@ -755,10 +755,10 @@ def _overall_decision(
             f"The top final deterministic rating ({selected.final_rating}) is tied with "
             f"{other_count} other {other_label}. "
             + (
-                "Tie-break rule: prefer a conventional baseline; if several are tied, keep their "
-                "discovery order. "
+                "Tie-break rule: select the conventional baseline when it is among the tied "
+                "candidates; otherwise select the first tied candidate in discovery order. "
                 if baseline is not None
-                else "Tie-break rule: keep the first tied candidate in discovery order. "
+                else "Tie-break rule: select the first tied candidate in discovery order. "
             )
         )
     else:

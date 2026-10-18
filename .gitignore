@@ -46,6 +46,7 @@ Thumbs.db
 tmp/
 *.log
 .vyuha-private/
+docs/live-samples/
 
 *.tsbuildinfo
 

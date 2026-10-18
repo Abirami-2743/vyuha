@@ -427,8 +427,27 @@ def test_tied_top_rating_prefers_conventional_baseline_and_explains_rule() -> No
     assert result.candidate_decisions[0].final_rating == result.candidate_decisions[1].final_rating
     assert result.overall_decision.selected_entity_id == "baseline-tied"
     assert "tied with 1 other candidate" in result.overall_decision.rationale
-    assert "prefer a conventional baseline" in result.overall_decision.rationale
+    assert "select the conventional baseline when it is among the tied candidates" in (
+        result.overall_decision.rationale
+    )
     assert "highest final deterministic rating" not in result.overall_decision.rationale
+
+
+def test_tied_top_rating_without_baseline_keeps_discovery_order() -> None:
+    async def exercise() -> AnalysisResult:
+        engine, client = _engine()
+        first = _comparison("unexpected-first", linkage="verified")
+        second = _comparison("unexpected-second", linkage="verified")
+        try:
+            return await engine.analyze(_discovery([first, second]), _brief())
+        finally:
+            await client.aclose()
+
+    result = run(exercise())
+
+    assert result.candidate_decisions[0].final_rating == result.candidate_decisions[1].final_rating
+    assert result.overall_decision.selected_entity_id == "unexpected-first"
+    assert "select the first tied candidate in discovery order" in result.overall_decision.rationale
 
 
 def test_osm_only_baseline_is_critiqued_and_skipped_without_relaxing_rules() -> None:

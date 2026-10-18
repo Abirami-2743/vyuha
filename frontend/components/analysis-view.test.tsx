@@ -157,11 +157,24 @@ describe("AnalysisView states", () => {
     );
 
     expect(screen.getByText("Analysis in progress")).toBeInTheDocument();
-    expect(screen.getByText(/Waking up the server\? Free hosted instances can take up to a minute/))
-      .toBeInTheDocument();
+    expect(screen.queryByText(/Waking up the server/)).not.toBeInTheDocument();
     expect(screen.getByText("Challenge the recommendation")).toBeInTheDocument();
     expect(screen.getByLabelText("running")).toBeInTheDocument();
     expect(screen.getAllByLabelText("not started").length).toBeGreaterThan(0);
+  });
+
+  it("shows the cold-start message only after the response wait threshold", () => {
+    render(
+      <AnalysisView
+        analysis={null}
+        error={null}
+        progress={progress}
+        state="loading"
+        wakingUp
+      />,
+    );
+
+    expect(screen.getByText(/Waking up the server/)).toBeInTheDocument();
   });
 
   it("explains an empty live response without inventing candidates", () => {
@@ -288,6 +301,8 @@ describe("AnalysisView states", () => {
       "1 candidates found · critic cut 1 · recommended: No candidate supported (no candidate supported)",
     );
     expect(verdict).toHaveTextContent("No next step was returned.");
+    expect(screen.queryByText("Overall decision")).not.toBeInTheDocument();
+    expect(within(verdict).getAllByText("Rule-based")).toHaveLength(1);
     expect(
       screen.getByText(/Why Qloo suggests this: Qloo returned this candidate for the selected brand/),
     )
@@ -363,6 +378,31 @@ describe("AnalysisView states", () => {
       throw new Error("The critic finding should have a list item.");
     }
     expect(within(criticismItem).getByText("Rule-based")).toBeInTheDocument();
+  });
+
+  it("lists backend-provided limitations for partial results", () => {
+    const analysis = analysisWithCandidate();
+    analysis.discovery.status = "partial";
+    analysis.discovery.limitations = [
+      "Some complementarity or goal-alignment interpretations are missing or partial; unknowns remain unknown.",
+    ];
+
+    render(
+      <AnalysisView
+        analysis={analysis}
+        error={null}
+        progress={progress}
+        state="partial"
+      />,
+    );
+
+    expect(
+      screen.getByText("Some partner-fit assessments are incomplete; unsupported questions remain unanswered."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Partial results: the backend reported limitations. Review what is missing before acting."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("What remains unknown")).not.toBeInTheDocument();
   });
 
   it("keeps the cannot-verify skip reason visible", () => {

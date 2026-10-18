@@ -1,6 +1,6 @@
-# Vyuha progress — Task 7 of 7
+# Vyuha progress — deployment readiness
 
-Updated: October 17, 2026
+Updated: October 18, 2026
 
 ## Done
 
@@ -23,16 +23,30 @@ Updated: October 17, 2026
 - Browser fallback check: with the backend stopped and the page reloaded, the real sample request failed and the app loaded the private saved analysis with its capture date and “not live” banner. Identity selection remained user-controlled.
 - Backend CORS, daily/per-IP limiter unit test, and request validation are covered. The local saved-run file was confirmed ignored by Git.
 - Backend final checks: `python -m pytest tests -q` (56 passed), `python -m ruff check backend tests --config backend\pyproject.toml` (all checks passed), and `python -m mypy --config-file backend\pyproject.toml backend\app` (success, 13 source files).
-- Frontend final checks: `npm run lint`, `npm run typecheck`, `npm run test` (8 passed), and `npm run build` (optimized build succeeded; `/api/saved-run` is dynamic).
+- Frontend prior checks: `npm run lint`, `npm run typecheck`, `npm run test` (8 passed), and `npm run build` (optimized build succeeded).
 - Judge review and before/after self-assessment are in `docs/judge-review.md`; scores are self-assessment, not measurement.
-- `npm audit` reported 14 advisories (2 critical, 8 high, 4 moderate). Runtime: `next` (moderate) and `postcss` (high). Dev-only: `@next/eslint-plugin-next`, `@vitest/mocker`, `braces`, `chokidar`, `eslint-config-next`, `fast-glob`, `micromatch`, `postcss-nested`, `postcss-selector-parser`, `tailwindcss`, `tinypool`, and `vitest`. No force-fix was run.
 
 ## Blocked
 
-- No local implementation blocker. The saved fallback needs a private file available to the frontend runtime; Vercel and Render do not share a filesystem, so deployment must provide the file to the frontend service or use an approved private storage arrangement.
+- Hosted verification is pending because this task did not authorize deployment. Render/Vercel secrets, public URLs, cross-network behavior, and live provider calls must be verified after the owner deploys.
 - Raw API response samples were removed from the repository and its history; none are published.
-- The dependency advisories above remain unmodified.
+- npm reported 12 dependency advisories after the normal Next.js/PostCSS upgrade (3 moderate, 7 high, 2 critical); no forced audit fix was run.
 
 ## Next
 
-- Final task: README section explaining what makes Vyuha Qloo-powered; audit repository contents, add/publish the public repo and license; deploy frontend on Vercel and backend on Render; complete the Devpost write-up and verify the hosted demo end to end.
+- Follow [docs/deploy.md](./docs/deploy.md) to connect the private repository, configure Render/Vercel, upload the saved-run secret file, and verify the hosted demo from a phone and private window.
+
+## Deployment-readiness changes
+
+- Backend `GET /saved-run` reads and validates the dated file from `VYUHA_SAVED_RUN_PATH`; writable live-run persistence is separate so Render's read-only secret file is not overwritten.
+- Render Blueprint pins Python 3.12.11, configures proxy headers, health checks, CORS, and judging-window rate limits; Vercel build configuration and public API URL steps are documented.
+- Frontend reads saved data from the backend, labels it non-live, delays cold-start messaging, and presents a single verdict with returned limitations and accurate ordering/tie-break explanations.
+- Added the Render/Vercel runbook, ignored/untracked `docs/live-samples`, and aligned the MIT copyright holder with `git config user.name`.
+
+## Verified for deployment readiness
+
+- Python 3.12.11 installed all 59 packages in `backend/requirements.txt` and `backend/requirements-dev.txt`.
+- `pytest tests -q`: 61 passed; `ruff check backend tests --config backend\\pyproject.toml`: all checks passed; mypy: success for 13 source files.
+- `npm run lint`, `npm run typecheck`, and `npm run test`: passed (10 frontend tests); `npm run build`: Next.js 16.4.2 production build succeeded.
+- `render.yaml` parsed and its Python pin, app target, and `/health` check were verified. Render's current secret-file documentation confirms `/etc/secrets/<filename>` for non-Docker services.
+- No deployment or commit was made.

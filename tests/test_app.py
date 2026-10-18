@@ -4,9 +4,11 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 import backend.app.main as main_module
 from backend.app.analysis_models import AnalysisStreamEvent
@@ -44,12 +46,71 @@ def test_health_endpoint_and_cors_configuration() -> None:
     assert response.headers["access-control-allow-origin"] == "https://vyuha.example"
 
 
+def test_saved_run_returns_validated_file_and_capture_date(tmp_path: Path) -> None:
+    saved_run_path = tmp_path / "saved-run.json"
+    saved_run_path.write_text(
+        json.dumps(
+            {
+                "captured_at": "2026-10-17T12:00:00Z",
+                "analysis": {
+                    "discovery": {
+                        "status": "empty",
+                        "business_identity": {
+                            "status": "unavailable",
+                            "osm_status": "unavailable",
+                        },
+                    },
+                    "overall_decision": {
+                        "result": "no candidate supported",
+                        "rationale": "No supported candidate.",
+                    },
+                    "critic_text_status": "rule_based_unavailable",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = make_settings(vyuha_saved_run_path=saved_run_path)
+
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/saved-run")
+
+    assert response.status_code == 200
+    assert response.json()["captured_at"] == "2026-10-17T12:00:00Z"
+    assert response.json()["analysis"]["discovery"]["status"] == "empty"
+
+
+def test_saved_run_is_not_found_when_unset_or_missing(tmp_path: Path) -> None:
+    app_without_path = create_app(make_settings())
+    app_with_missing_path = create_app(
+        make_settings(vyuha_saved_run_path=tmp_path / "missing.json")
+    )
+
+    with TestClient(app_without_path) as client:
+        unset_response = client.get("/saved-run")
+    with TestClient(app_with_missing_path) as client:
+        missing_response = client.get("/saved-run")
+
+    assert unset_response.status_code == 404
+    assert missing_response.status_code == 404
+
+
 def test_localhost_and_loopback_origins_are_allowed_by_default() -> None:
     with TestClient(create_app(make_settings())) as client:
         response = client.get("/health", headers={"Origin": "http://127.0.0.1:3000"})
 
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:3000"
+
+
+def test_analysis_limits_have_judging_window_defaults() -> None:
+    settings = make_settings()
+    configured_limits = make_settings(analysis_per_ip_daily_limit=7, analysis_daily_limit=70)
+
+    assert settings.analysis_per_ip_daily_limit == 100
+    assert settings.analysis_daily_limit == 1_000
+    assert configured_limits.analysis_per_ip_daily_limit == 7
+    assert configured_limits.analysis_daily_limit == 70
 
 
 def test_oversized_request_body_is_rejected() -> None:
@@ -99,7 +160,7 @@ def test_analysis_limiter_enforces_per_ip_and_daily_limits() -> None:
     assert asyncio.run(consume_requests()) == [None, "per_ip", None, "daily"]
 
 
-def test_analyze_limit_returns_retryable_saved_run_guidance(
+def test_analyze_limit_uses_trusted_forwarded_ip_and_suggests_saved_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class PipelineFixture:
@@ -124,9 +185,21 @@ def test_analyze_limit_returns_retryable_saved_run_guidance(
         }
     }
     settings = make_settings(analysis_per_ip_daily_limit=1)
-    with TestClient(create_app(settings)) as client:
-        first = client.post("/analyze", json=request)
-        limited = client.post("/analyze", json=request)
+    proxied_app = ProxyHeadersMiddleware(
+        create_app(settings),
+        trusted_hosts="192.0.2.10",
+    )
+    with TestClient(proxied_app, client=("192.0.2.10", 12_345)) as client:
+        first = client.post(
+            "/analyze",
+            json=request,
+            headers={"X-Forwarded-For": "198.51.100.20, 203.0.113.7"},
+        )
+        limited = client.post(
+            "/analyze",
+            json=request,
+            headers={"X-Forwarded-For": "198.51.100.99, 203.0.113.7"},
+        )
 
     assert first.status_code == 200
     assert limited.status_code == 429
@@ -139,6 +212,7 @@ def test_discovery_endpoint_exposes_validated_request_contract() -> None:
 
     assert "/discover" in schema["paths"]
     assert "post" in schema["paths"]["/discover"]
+    assert "get" in schema["paths"]["/saved-run"]
 
 
 def test_analyze_endpoint_streams_stage_progress(

@@ -10,13 +10,15 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from stat import S_ISREG
 from tempfile import NamedTemporaryFile
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, ValidationError
 
 from .analysis_models import AnalysisResult, AnalysisStreamEvent
 from .discovery_models import DiscoveryRequest, DiscoveryResult
@@ -29,6 +31,12 @@ from .settings import REPOSITORY_ROOT, Settings, get_settings
 from .verification import NominatimClient
 
 logger = logging.getLogger("vyuha.api")
+MAX_SAVED_RUN_BYTES = 5 * 1024 * 1024
+
+
+class SavedRunResponse(BaseModel):
+    captured_at: datetime
+    analysis: AnalysisResult
 
 
 class DailyAnalysisLimiter:
@@ -292,6 +300,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok", "service": "vyuha"}
 
+    @application.get("/saved-run", response_model=SavedRunResponse)
+    async def saved_run() -> SavedRunResponse:
+        configured_path = configured.vyuha_saved_run_path
+        if configured_path is None:
+            raise HTTPException(status_code=404, detail="No saved run is configured.")
+
+        saved_run_path = (
+            configured_path
+            if configured_path.is_absolute()
+            else REPOSITORY_ROOT / configured_path
+        )
+        try:
+            file_info = saved_run_path.stat()
+            if not S_ISREG(file_info.st_mode) or file_info.st_size > MAX_SAVED_RUN_BYTES:
+                raise ValueError("saved run is not a regular file within the size limit")
+            payload = json.loads(saved_run_path.read_text(encoding="utf-8"))
+            return SavedRunResponse.model_validate(payload)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="No saved run is available.") from exc
+        except (OSError, ValueError, ValidationError) as exc:
+            logger.error(
+                "saved_run_read_failed",
+                extra={
+                    "event": "saved_run_read_failed",
+                    "exception_type": type(exc).__name__,
+                },
+            )
+            raise HTTPException(status_code=500, detail="The saved run is unavailable.") from exc
+
     @application.post("/discover", response_model=DiscoveryResult)
     async def discover(
         request: DiscoveryRequest,
@@ -343,7 +380,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         and event.status == "complete"
                         and event.result is not None
                     ):
-                        persist_saved_run(configured.vyuha_saved_run_path, event.result)
+                        persist_saved_run(configured.vyuha_saved_run_output_path, event.result)
                     yield f"data: {event.model_dump_json()}\n\n"
             except IntegrationError as exc:
                 logger.warning(

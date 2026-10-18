@@ -1,0 +1,62 @@
+services:
+  - type: web
+    name: vyuha-backend
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips "$FORWARDED_ALLOW_IPS"
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.11
+      - key: FORWARDED_ALLOW_IPS
+        value: "*"
+      - key: QLOO_API_KEY
+        sync: false
+      - key: QLOO_BASE_URL
+        value: https://hackathon.api.qloo.com
+      - key: QLOO_TIMEOUT_SECONDS
+        value: "30"
+      - key: QLOO_MAX_RETRIES
+        value: "2"
+      - key: QLOO_RETRY_BACKOFF_SECONDS
+        value: "0.5"
+      - key: LLM_BASE_URL
+        value: https://api.mistral.ai/v1
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: mistral-small-latest
+      - key: LLM_FALLBACK_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: LLM_FALLBACK_API_KEY
+        sync: false
+      - key: LLM_FALLBACK_MODEL
+        value: openrouter/free
+      - key: LLM_TIMEOUT_SECONDS
+        value: "45"
+      - key: LLM_MAX_RETRIES
+        value: "1"
+      - key: LLM_RETRY_BACKOFF_SECONDS
+        value: "0.5"
+      - key: LLM_MIN_REQUEST_INTERVAL_SECONDS
+        value: "1"
+      - key: LLM_INVALID_OUTPUT_RETRIES
+        value: "1"
+      - key: LLM_HTTP_REFERER
+        value: http://localhost:3000
+      - key: LLM_APP_TITLE
+        value: Vyuha
+      - key: CORS_ORIGINS
+        value: http://localhost:3000,http://127.0.0.1:3000
+      - key: MAX_REQUEST_BYTES
+        value: "1048576"
+      - key: ANALYSIS_PER_IP_DAILY_LIMIT
+        value: "100"
+      - key: ANALYSIS_DAILY_LIMIT
+        value: "1000"
+      - key: VYUHA_SAVED_RUN_PATH
+        value: /etc/secrets/saved-run.json
+      - key: LOG_LEVEL
+        value: INFO

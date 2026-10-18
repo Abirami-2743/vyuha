@@ -384,6 +384,7 @@ export function AnalysisView({
   progress,
   onRetry,
   isSavedRun = false,
+  wakingUp = false,
 }: {
   state: ViewState;
   analysis: Analysis | null;
@@ -391,6 +392,7 @@ export function AnalysisView({
   progress: Map<string, { status: string; message: string }>;
   onRetry?: () => void;
   isSavedRun?: boolean;
+  wakingUp?: boolean;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState("");
@@ -399,10 +401,12 @@ export function AnalysisView({
     return (
       <section aria-live="polite" className="rounded-xl border border-line bg-white p-6">
         <p className="font-semibold">Analysis in progress</p>
-        <p className="mt-2 text-sm leading-6 text-slate-700">
-          Waking up the server? Free hosted instances can take up to a minute. The request stays
-          open while the service starts.
-        </p>
+        {wakingUp && (
+          <p className="mt-2 text-sm leading-6 text-slate-700">
+            Waking up the server. Free hosted instances can take up to a minute; the request stays
+            open while the service starts.
+          </p>
+        )}
         <ul className="mt-5 space-y-3">
           {stageLabels.map(([stage, label]) => {
             const event = progress.get(stage);
@@ -480,6 +484,12 @@ export function AnalysisView({
     return rightSelected - leftSelected || rightBaseline - leftBaseline;
   });
   const partial = state === "partial" || analysis.discovery.status === "partial";
+  const limitations = [
+    ...new Set([
+      ...analysis.discovery.limitations,
+      ...analysis.discovery.business_identity.limitations,
+    ]),
+  ];
   const outreach = analysis.outreach_drafts[0];
   const indexedEvidence = evidenceIndex(analysis);
   const activeDraft = draft ?? (outreach ? `${outreach.subject}\n\n${outreach.body}` : "");
@@ -497,48 +507,42 @@ export function AnalysisView({
     <div className="space-y-8">
       <section
         aria-label="Verdict"
-        className="rounded-xl border border-forest/30 bg-forest p-5 text-white sm:p-6"
+        className="rounded-xl border border-forest/20 bg-white p-6 sm:p-8"
       >
-        <p className="text-xs font-bold uppercase tracking-widest text-emerald-100">Verdict</p>
-        <p className="mt-3 text-lg font-bold leading-7 sm:text-xl">
-          {analysis.candidate_decisions.length} candidates found · critic cut {criticCuts} ·
-          recommended: {recommendedName} ({analysis.overall_decision.result}) · next step: {nextStep}
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <SourceTag source="rule_based" />
-          {recommendedExperiment ? (
-            <SourceTag source="rule_based" />
-          ) : (
-            <SourceTag source="unknown" />
-          )}
-        </div>
-        <p className="mt-3 text-xs leading-5 text-emerald-50">
-          Candidate and critic counts come from this analysis; a rating is not a probability or
-          commercial forecast.
-        </p>
-      </section>
-
-      <section className="rounded-xl border border-forest/20 bg-white p-6 sm:p-8">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-xs font-bold uppercase tracking-widest text-forest">
-            Overall decision
-          </span>
+          <p className="text-xs font-bold uppercase tracking-widest text-forest">Verdict</p>
           <RatingBadge rating={analysis.overall_decision.result} />
           <SourceTag source="rule_based" />
         </div>
         <h2 className="mt-4 text-2xl font-bold tracking-tight sm:text-3xl">
-          {analysis.overall_decision.selected_candidate_name ?? "No candidate supported"}
+          {recommendedName}
         </h2>
-        <div className="mt-3 flex max-w-3xl flex-wrap items-start gap-2">
-          <SourceTag source="rule_based" />
-          <p className="min-w-0 flex-1 leading-7 text-slate-700">
-            {analysis.overall_decision.rationale}
-          </p>
-        </div>
+        <p className="mt-3 max-w-3xl leading-7 text-slate-700">
+          {analysis.overall_decision.rationale}
+        </p>
+        <p className="mt-4 text-sm leading-6 text-slate-700">
+          {analysis.candidate_decisions.length} candidates found · critic cut {criticCuts} ·
+          recommended: {recommendedName} ({analysis.overall_decision.result}) · next step: {nextStep}
+        </p>
+        <p className="mt-2 text-xs leading-5 text-slate-600">
+          Candidate and critic counts come from this analysis; a rating is not a probability or
+          commercial forecast.
+        </p>
         {partial && (
-          <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm leading-6 text-amber-950">
-            Partial results: the backend reported limitations. Review what is missing before acting.
-          </p>
+          <div className="mt-4 rounded-lg bg-amber-50 p-3 text-sm leading-6 text-amber-950">
+            <p className="font-semibold">Partial results — limitations returned by the backend</p>
+            {limitations.length > 0 ? (
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                {limitations.map((limitation) => (
+                  <li key={limitation}>{readableLimitation(limitation)}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="mt-2">
+                The backend marked this analysis partial but did not return limitation details.
+              </p>
+            )}
+          </div>
         )}
         {analysis.discovery.location_query && (
           <p className="mt-4 text-xs leading-5 text-slate-600">
@@ -562,7 +566,8 @@ export function AnalysisView({
             </p>
           </div>
           <p className="text-xs text-slate-600">
-            Affinity: relative signal from Qloo, not customer overlap.
+            Shown order: selected candidate first (when any), then the conventional alternative,
+            then discovery order. Affinity is a relative signal from Qloo, not customer overlap.
           </p>
         </div>
         <div className="grid items-start gap-4 xl:grid-cols-2">
@@ -727,16 +732,12 @@ export function AnalysisView({
         </article>
       </section>
 
-      {(analysis.discovery.limitations.length > 0 ||
-        analysis.discovery.business_identity.limitations.length > 0) && (
+      {!partial && limitations.length > 0 && (
         <section className="rounded-xl border border-line bg-white p-5">
           <h2 className="text-lg font-bold">What remains unknown</h2>
           <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-slate-700">
-            {[
-              ...analysis.discovery.limitations,
-              ...analysis.discovery.business_identity.limitations,
-            ].map((limitation, index) => (
-              <li key={`${limitation}-${index}`}>
+            {limitations.map((limitation) => (
+              <li key={limitation}>
                 <SourceTag source="unknown" /> {readableLimitation(limitation)}
               </li>
             ))}

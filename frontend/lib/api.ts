@@ -14,8 +14,11 @@ export async function checkApi(): Promise<void> {
 }
 
 export async function getSavedRun(): Promise<SavedRun | null> {
-  const response = await fetch("/api/saved-run", { cache: "no-store" });
-  if (response.status === 204) return null;
+  const response = await fetch(`${API_URL}/saved-run`, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(65_000),
+  });
+  if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Saved run could not be loaded (${response.status}).`);
   const savedRun: unknown = await response.json();
   if (!isSavedRun(savedRun)) throw new Error("The configured saved run is invalid.");
