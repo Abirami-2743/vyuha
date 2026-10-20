@@ -80,6 +80,84 @@ def test_saved_run_returns_validated_file_and_capture_date(tmp_path: Path) -> No
     assert response.json()["analysis"]["discovery"]["status"] == "empty"
 
 
+def test_demo_saved_run_returns_validated_data_date_and_metadata(tmp_path: Path) -> None:
+    saved_runs_dir = tmp_path / "saved-runs"
+    saved_runs_dir.mkdir()
+    (saved_runs_dir / "blue-bottle-san-francisco.json").write_text(
+        json.dumps(
+            {
+                "captured_at": "2026-10-17T12:00:00Z",
+                "analysis": {
+                    "discovery": {
+                        "status": "empty",
+                        "business_identity": {
+                            "status": "unavailable",
+                            "osm_status": "unavailable",
+                        },
+                    },
+                    "overall_decision": {
+                        "result": "no candidate supported",
+                        "rationale": "No supported candidate.",
+                    },
+                    "critic_text_status": "rule_based_unavailable",
+                },
+                "metadata": {
+                    "demo_id": "blue-bottle-san-francisco",
+                    "identity_selection_rule": "First returned choice by stable name and ID.",
+                    "identity_selections": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with TestClient(
+        create_app(make_settings(vyuha_saved_runs_dir=saved_runs_dir))
+    ) as client:
+        response = client.get("/saved-run/blue-bottle-san-francisco")
+
+    assert response.status_code == 200
+    assert response.json()["captured_at"] == "2026-10-17T12:00:00Z"
+    assert response.json()["analysis"]["discovery"]["status"] == "empty"
+    assert response.json()["metadata"]["demo_id"] == "blue-bottle-san-francisco"
+
+
+def test_demo_saved_run_returns_404_for_missing_file_and_disallowed_id(
+    tmp_path: Path,
+) -> None:
+    saved_runs_dir = tmp_path / "saved-runs"
+    saved_runs_dir.mkdir()
+    with TestClient(
+        create_app(make_settings(vyuha_saved_runs_dir=saved_runs_dir))
+    ) as client:
+        missing = client.get("/saved-run/nike-portland")
+        disallowed = client.get("/saved-run/..%2F.env")
+
+    assert missing.status_code == 404
+    assert disallowed.status_code == 404
+
+
+def test_demo_saved_run_does_not_consume_analysis_limiter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    async def consume(self: DailyAnalysisLimiter, client_ip: str) -> tuple[str | None, int]:
+        nonlocal calls
+        calls += 1
+        return None, 1
+
+    monkeypatch.setattr(DailyAnalysisLimiter, "consume", consume)
+    with TestClient(
+        create_app(make_settings(vyuha_saved_runs_dir=tmp_path))
+    ) as client:
+        response = client.get("/saved-run/blue-bottle-san-francisco")
+
+    assert response.status_code == 404
+    assert calls == 0
+
+
 def test_saved_run_is_not_found_when_unset_or_missing(tmp_path: Path) -> None:
     app_without_path = create_app(make_settings())
     app_with_missing_path = create_app(
@@ -213,6 +291,7 @@ def test_discovery_endpoint_exposes_validated_request_contract() -> None:
     assert "/discover" in schema["paths"]
     assert "post" in schema["paths"]["/discover"]
     assert "get" in schema["paths"]["/saved-run"]
+    assert "get" in schema["paths"]["/saved-run/{demo_id}"]
 
 
 def test_analyze_endpoint_streams_stage_progress(

@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnalysisView } from "@/components/analysis-view";
 import { SourceTag } from "@/components/evidence";
+import { SavedRunBanner } from "@/components/saved-run-banner";
 import { analyze, checkApi, getSavedRun } from "@/lib/api";
+import demoDefinitions from "@/lib/demo-definitions.json";
 import type {
   Analysis,
   DiscoveryRequest,
@@ -14,6 +16,7 @@ import type {
 } from "@/lib/contracts";
 
 type Screen = "landing" | "brief" | "analysis";
+type DemoId = (typeof demoDefinitions)[number]["id"];
 type ChoiceState = {
   osm: Place | null;
   qlooEntityId: string;
@@ -33,21 +36,6 @@ const initialBrief = {
   requirements: "",
   constraints: "",
   seeds: "",
-};
-
-const sampleBrief = {
-  ...initialBrief,
-  businessName: "Blue Bottle Coffee",
-  industry: "Coffee",
-  city: "San Francisco",
-  targetMarket: "San Francisco coffee drinkers and local event-goers",
-  website: "https://bluebottlecoffee.com",
-  identifyingInfo: "Specialty coffee brand",
-  goal: "Explore a low-cost cross-industry partner for a one-day San Francisco coffee pop-up; learn whether the format is feasible before committing.",
-  budgetMin: "0",
-  budgetMax: "500",
-  requirements: "One-day pop-up\nShared space\nCoffee service",
-  constraints: "Keep total costs under $500\nVerify partner availability and fees before commitment",
 };
 
 function lines(value: string): string[] {
@@ -259,6 +247,10 @@ export default function Home() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [savedRun, setSavedRun] = useState<SavedRun | null>(null);
+  const [savedRuns, setSavedRuns] = useState<Partial<Record<DemoId, SavedRun>>>({});
+  const [savedRunsLoading, setSavedRunsLoading] = useState(true);
+  const [activeSavedRun, setActiveSavedRun] = useState<SavedRun | null>(null);
+  const [activeDemoId, setActiveDemoId] = useState<DemoId | null>(null);
   const [analysisIsSaved, setAnalysisIsSaved] = useState(false);
   const [progress, setProgress] = useState<Map<string, ProgressEvent>>(new Map());
   const [loading, setLoading] = useState(false);
@@ -298,11 +290,31 @@ export default function Home() {
 
   useEffect(() => {
     let mounted = true;
+    void Promise.all(
+      demoDefinitions.map(async ({ id }) => {
+        try {
+          return [id, await getSavedRun(id)] as const;
+        } catch (error: unknown) {
+          console.error("saved_demo_run_load_failed", {
+            event: "saved_demo_run_load_failed",
+            demo_id: id,
+            exception_type: error instanceof Error ? error.name : "UnknownError",
+          });
+          return [id, null] as const;
+        }
+      }),
+    ).then((runs) => {
+      if (!mounted) return;
+      const available: Partial<Record<DemoId, SavedRun>> = {};
+      for (const [id, run] of runs) {
+        if (run) available[id] = run;
+      }
+      setSavedRuns(available);
+      setSavedRunsLoading(false);
+    });
     void getSavedRun()
       .then((run) => {
-        if (mounted && run) {
-          setSavedRun(run);
-        }
+        if (mounted && run) setSavedRun(run);
       })
       .catch((error: unknown) => {
         if (mounted) {
@@ -317,14 +329,16 @@ export default function Home() {
     };
   }, []);
 
-  const submitAnalysis = useCallback(async (request: DiscoveryRequest) => {
+  const submitAnalysis = useCallback(async (request: DiscoveryRequest, demoId?: DemoId) => {
     if (analysisInFlight.current) return;
     analysisInFlight.current = true;
+    setActiveDemoId(demoId ?? null);
     setCurrentRequest(request);
     setScreen("analysis");
     setLoading(true);
     setAnalysis(null);
     setAnalysisError(null);
+    setActiveSavedRun(null);
     setAnalysisIsSaved(false);
     setProgress(new Map());
     setAnalysisWakingUp(false);
@@ -366,14 +380,19 @@ export default function Home() {
       let fileRun: SavedRun | null = null;
       let savedRunLoadFailed = false;
       try {
-        fileRun = await getSavedRun();
+        fileRun = await getSavedRun(demoId);
       } catch {
         savedRunLoadFailed = true;
       }
-      const fallback = fileRun ?? savedRun;
+      const fallback = fileRun ?? (demoId ? savedRuns[demoId] ?? null : savedRun);
       if (fallback) {
         setAnalysis(fallback.analysis);
-        setSavedRun(fallback);
+        setActiveSavedRun(fallback);
+        if (demoId) {
+          setSavedRuns((current) => ({ ...current, [demoId]: fallback }));
+        } else {
+          setSavedRun(fallback);
+        }
         setAnalysisIsSaved(true);
         setAnalysisError(failureMessage);
       } else {
@@ -392,7 +411,7 @@ export default function Home() {
       analysisInFlight.current = false;
       setLoading(false);
     }
-  }, [savedRun]);
+  }, [savedRun, savedRuns]);
 
   function createRequest(values: typeof initialBrief = form): DiscoveryRequest | null {
     const minimum = Number(values.budgetMin);
@@ -498,6 +517,40 @@ export default function Home() {
     return "results" as const;
   }, [analysis, analysisError, loading]);
 
+  function startDemo(demo: (typeof demoDefinitions)[number]) {
+    const values = {
+      ...initialBrief,
+      businessName: demo.input.business_name,
+      industry: demo.input.industry,
+      city: demo.input.city,
+      targetMarket: demo.input.target_market,
+      website: demo.input.website,
+      identifyingInfo: demo.input.identifying_info,
+      goal: demo.input.collaboration_goal,
+      budgetMin: demo.input.budget_min,
+      budgetMax: demo.input.budget_max,
+      requirements: demo.input.event_requirements.join("\n"),
+      constraints: demo.input.constraints.join("\n"),
+      seeds: demo.input.seed_brands.join("\n"),
+    };
+    setForm(values);
+    const request = createRequest(values);
+    if (request) void submitAnalysis(request, demo.id);
+  }
+
+  function viewSavedDemo(demoId: DemoId) {
+    const run = savedRuns[demoId];
+    if (!run) return;
+    setActiveDemoId(demoId);
+    setActiveSavedRun(run);
+    setAnalysis(run.analysis);
+    setAnalysisError(null);
+    setAnalysisIsSaved(true);
+    setCurrentRequest(null);
+    setProgress(new Map());
+    setScreen("analysis");
+  }
+
   return (
     <main className="min-h-screen">
       <header className="border-b border-line bg-white">
@@ -550,40 +603,70 @@ export default function Home() {
             </p>
           </section>
 
-          <div className="mt-7 flex flex-wrap gap-3">
-            <button
-              className="rounded-lg bg-forest px-6 py-3 font-semibold text-white hover:bg-emerald-950"
-              onClick={() => {
-                setForm(sampleBrief);
-                const request = createRequest(sampleBrief);
-                if (request) void submitAnalysis(request);
-              }}
-              type="button"
-            >
-              Try a sample brief
-            </button>
-            <button
-              className="rounded-lg border border-line bg-white px-6 py-3 font-semibold text-forest hover:bg-paper"
-              onClick={() => setScreen("brief")}
-              type="button"
-            >
-              Start your own brief
-            </button>
-            {savedRun && (
+          <section aria-labelledby="demo-gallery-title" className="mt-12">
+            <div className="flex flex-wrap items-end justify-between gap-4">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-forest">
+                  Judge demos
+                </p>
+                <h2 className="mt-2 text-2xl font-bold" id="demo-gallery-title">
+                  Five briefs, one evidence-first pipeline
+                </h2>
+              </div>
               <button
-                className="rounded-lg border border-line bg-white px-6 py-3 font-semibold text-forest hover:bg-paper"
+                className="rounded-lg bg-forest px-5 py-3 font-semibold text-white hover:bg-emerald-950"
                 onClick={() => {
-                  setAnalysis(savedRun.analysis);
-                  setAnalysisError(null);
-                  setAnalysisIsSaved(true);
-                  setScreen("analysis");
+                  setForm(initialBrief);
+                  setActiveDemoId(null);
+                  setScreen("brief");
                 }}
                 type="button"
               >
-                View a saved run
+                Type your own brief
               </button>
-            )}
-          </div>
+            </div>
+            <ul className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {demoDefinitions.map((demo) => {
+                const saved = savedRuns[demo.id];
+                return (
+                  <li
+                    className="flex min-w-0 flex-col rounded-xl border border-line bg-white p-5"
+                    key={demo.id}
+                  >
+                    <h3 className="text-lg font-bold">{demo.title}</h3>
+                    <p className="mt-2 flex-1 text-sm leading-6 text-slate-700">{demo.watchFor}</p>
+                    {saved && (
+                      <p className="mt-3 text-xs text-slate-600">
+                        Saved capture: {new Date(saved.captured_at).toLocaleDateString()}
+                      </p>
+                    )}
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button
+                        className="min-h-11 rounded-lg bg-forest px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-950"
+                        onClick={() => startDemo(demo)}
+                        type="button"
+                      >
+                        Run live
+                      </button>
+                      {saved ? (
+                        <button
+                          className="min-h-11 rounded-lg border border-line px-4 py-2 text-sm font-semibold text-forest hover:bg-paper"
+                          onClick={() => viewSavedDemo(demo.id)}
+                          type="button"
+                        >
+                          View saved run
+                        </button>
+                      ) : savedRunsLoading ? (
+                        <span className="flex min-h-11 items-center px-2 text-xs text-slate-500">
+                          Checking saved run…
+                        </span>
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
 
           <ol className="mt-16 grid gap-4 border-t border-line pt-7 sm:grid-cols-2 lg:grid-cols-4">
             {[
@@ -808,16 +891,11 @@ export default function Home() {
 
       {screen === "analysis" && (
         <section className="mx-auto max-w-7xl px-5 py-8 sm:px-8 sm:py-12">
-          {analysisIsSaved && savedRun && (
-            <div
-              className="mb-6 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm leading-6 text-amber-950"
-              role="status"
-            >
-              <p className="font-bold">
-                Saved run from {new Date(savedRun.captured_at).toLocaleString()}, not live.
-              </p>
-              {analysisError && <p>Live analysis unavailable: {analysisError}</p>}
-            </div>
+          {analysisIsSaved && activeSavedRun && (
+            <SavedRunBanner
+              capturedAt={activeSavedRun.captured_at}
+              liveError={analysisError}
+            />
           )}
           <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -831,7 +909,10 @@ export default function Home() {
             {!loading && (
               <button
                 className="rounded-lg border border-line bg-white px-4 py-2 text-sm font-semibold hover:bg-paper"
-                onClick={() => setScreen("brief")}
+                onClick={() => {
+                  setActiveDemoId(null);
+                  setScreen("brief");
+                }}
                 type="button"
               >
                 Edit brief
@@ -846,7 +927,7 @@ export default function Home() {
             <ChoicePanel
               analysis={analysis}
               onEdit={() => setScreen("brief")}
-              onSubmit={(request) => void submitAnalysis(request)}
+              onSubmit={(request) => void submitAnalysis(request, activeDemoId ?? undefined)}
               request={currentRequest}
               submitting={loading}
             />
@@ -855,7 +936,9 @@ export default function Home() {
               analysis={analysis}
               error={analysisError}
               onRetry={
-                currentRequest ? () => void submitAnalysis(currentRequest) : undefined
+                currentRequest
+                  ? () => void submitAnalysis(currentRequest, activeDemoId ?? undefined)
+                  : undefined
               }
               progress={progress}
               state={viewState}

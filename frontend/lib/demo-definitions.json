@@ -1,0 +1,100 @@
+[
+  {
+    "id": "blue-bottle-san-francisco",
+    "title": "Blue Bottle Coffee · San Francisco",
+    "watchFor": "Watch how the comparison distinguishes taste signals from evidence about a one-day event.",
+    "input": {
+      "business_name": "Blue Bottle Coffee",
+      "industry": "Coffee",
+      "city": "San Francisco",
+      "target_market": "San Francisco coffee drinkers and local event-goers",
+      "website": "https://bluebottlecoffee.com",
+      "identifying_info": "Specialty coffee brand",
+      "collaboration_goal": "Explore a low-cost cross-industry partner for a one-day San Francisco coffee pop-up; learn whether the format is feasible before committing.",
+      "budget_min": "0",
+      "budget_max": "500",
+      "event_requirements": ["One-day pop-up", "Shared space", "Coffee service"],
+      "constraints": [
+        "Keep total costs under $500",
+        "Verify partner availability and fees before commitment"
+      ],
+      "seed_brands": []
+    }
+  },
+  {
+    "id": "the-ordinary-new-york",
+    "title": "The Ordinary · New York, NY",
+    "watchFor": "Watch how the supplied seed brands are resolved and kept distinct from independent evidence.",
+    "input": {
+      "business_name": "The Ordinary",
+      "industry": "Cosmetics",
+      "city": "New York, NY",
+      "target_market": "New York City skincare and cosmetics shoppers",
+      "website": "https://theordinary.com",
+      "identifying_info": "Skincare and cosmetics brand",
+      "collaboration_goal": "Explore a budget-bounded local collaboration and inspect what evidence supports or challenges the comparison.",
+      "budget_min": "100",
+      "budget_max": "1000",
+      "event_requirements": ["Local pop-up or collaboration"],
+      "constraints": ["Verify fees and availability before commitment"],
+      "seed_brands": ["Sephora", "Glossier"]
+    }
+  },
+  {
+    "id": "starbucks-chennai",
+    "title": "Starbucks · Chennai",
+    "watchFor": "Watch how Vyuha handles business identity and asks for a location choice when records are ambiguous.",
+    "input": {
+      "business_name": "Starbucks",
+      "industry": "Coffee",
+      "city": "Chennai",
+      "target_market": "Chennai coffee drinkers and nearby community members",
+      "website": "https://www.starbucks.in",
+      "identifying_info": "Starbucks coffee shop in Chennai",
+      "collaboration_goal": "Explore a small community coffee pop-up in Chennai and check which identity and local evidence can be established first.",
+      "budget_min": "0",
+      "budget_max": "500",
+      "event_requirements": ["Small community pop-up"],
+      "constraints": ["Confirm the intended business location before discovery"],
+      "seed_brands": []
+    }
+  },
+  {
+    "id": "nike-portland",
+    "title": "Nike · Portland, Oregon",
+    "watchFor": "Watch how a one-day community event is assessed against the available local evidence.",
+    "input": {
+      "business_name": "Nike",
+      "industry": "Clothes",
+      "city": "Portland, Oregon",
+      "target_market": "Portland community members and local event-goers",
+      "website": "https://www.nike.com",
+      "identifying_info": "Clothing and footwear brand",
+      "collaboration_goal": "Explore a one-day community pop-up in Portland and see what would need verification before making a commitment.",
+      "budget_min": "0",
+      "budget_max": "500",
+      "event_requirements": ["One-day community pop-up"],
+      "constraints": ["Verify venue, partner availability, and costs"],
+      "seed_brands": []
+    }
+  },
+  {
+    "id": "qvxxqz-blorpblorp-boise",
+    "title": "Qvxxqz Blorpblorp · Boise",
+    "watchFor": "Watch how missing identity evidence and an empty result are reported without invented candidates.",
+    "input": {
+      "business_name": "Qvxxqz Blorpblorp",
+      "industry": "Unspecified",
+      "city": "Boise",
+      "target_market": "Boise community members",
+      "website": "",
+      "identifying_info": "Invented demo business; no website or independent identity information is available.",
+      "collaboration_goal": "Explore whether a small local community pop-up is feasible, without assuming the business or possible partners can be verified.",
+      "budget_min": "0",
+      "budget_max": "500",
+      "event_requirements": ["Small community pop-up"],
+      "constraints": ["Do not assume an identity or invent missing evidence"],
+      "seed_brands": []
+    }
+  }
+]

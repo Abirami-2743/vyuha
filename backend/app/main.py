@@ -12,13 +12,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from stat import S_ISREG
 from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from .analysis_models import AnalysisResult, AnalysisStreamEvent
 from .discovery_models import DiscoveryRequest, DiscoveryResult
@@ -32,11 +32,56 @@ from .verification import NominatimClient
 
 logger = logging.getLogger("vyuha.api")
 MAX_SAVED_RUN_BYTES = 5 * 1024 * 1024
+DEMO_IDS = frozenset(
+    {
+        "blue-bottle-san-francisco",
+        "the-ordinary-new-york",
+        "starbucks-chennai",
+        "nike-portland",
+        "qvxxqz-blorpblorp-boise",
+    }
+)
+
+
+class SavedRunIdentitySelection(BaseModel):
+    kind: Literal["osm", "qloo", "seed"]
+    selected_name: str = Field(min_length=1, max_length=500)
+    selected_identifier: str = Field(min_length=1, max_length=256)
+
+
+class SavedRunMetadata(BaseModel):
+    demo_id: str = Field(min_length=1, max_length=100)
+    identity_selection_rule: str = Field(min_length=1, max_length=1_000)
+    identity_selections: list[SavedRunIdentitySelection] = Field(
+        default_factory=list,
+        max_length=50,
+    )
 
 
 class SavedRunResponse(BaseModel):
     captured_at: datetime
     analysis: AnalysisResult
+    metadata: SavedRunMetadata | None = None
+
+
+def read_saved_run(saved_run_path: Path, message: str) -> SavedRunResponse:
+    try:
+        file_info = saved_run_path.stat()
+        if not S_ISREG(file_info.st_mode) or file_info.st_size > MAX_SAVED_RUN_BYTES:
+            raise ValueError("saved run is not a regular file within the size limit")
+        payload = json.loads(saved_run_path.read_text(encoding="utf-8"))
+        return SavedRunResponse.model_validate(payload)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=message) from exc
+    except (OSError, ValueError, ValidationError) as exc:
+        logger.error(
+            "saved_run_read_failed",
+            extra={
+                "event": "saved_run_read_failed",
+                "exception_type": type(exc).__name__,
+            },
+        )
+        raise HTTPException(status_code=500, detail="The saved run is unavailable.") from exc
 
 
 class DailyAnalysisLimiter:
@@ -311,23 +356,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if configured_path.is_absolute()
             else REPOSITORY_ROOT / configured_path
         )
-        try:
-            file_info = saved_run_path.stat()
-            if not S_ISREG(file_info.st_mode) or file_info.st_size > MAX_SAVED_RUN_BYTES:
-                raise ValueError("saved run is not a regular file within the size limit")
-            payload = json.loads(saved_run_path.read_text(encoding="utf-8"))
-            return SavedRunResponse.model_validate(payload)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail="No saved run is available.") from exc
-        except (OSError, ValueError, ValidationError) as exc:
+        return read_saved_run(saved_run_path, "No saved run is available.")
+
+    @application.get("/saved-run/{demo_id}", response_model=SavedRunResponse)
+    async def saved_demo_run(demo_id: str) -> SavedRunResponse:
+        if demo_id not in DEMO_IDS:
+            raise HTTPException(status_code=404, detail="No saved run is available.")
+        configured_directory = configured.vyuha_saved_runs_dir
+        if configured_directory is None:
+            raise HTTPException(status_code=404, detail="No saved run is available.")
+        saved_runs_directory = (
+            configured_directory
+            if configured_directory.is_absolute()
+            else REPOSITORY_ROOT / configured_directory
+        )
+        run = read_saved_run(
+            saved_runs_directory / f"{demo_id}.json",
+            "No saved run is available.",
+        )
+        if run.metadata is not None and run.metadata.demo_id != demo_id:
             logger.error(
-                "saved_run_read_failed",
-                extra={
-                    "event": "saved_run_read_failed",
-                    "exception_type": type(exc).__name__,
-                },
+                "saved_run_demo_id_mismatch",
+                extra={"event": "saved_run_demo_id_mismatch", "demo_id": demo_id},
             )
-            raise HTTPException(status_code=500, detail="The saved run is unavailable.") from exc
+            raise HTTPException(status_code=500, detail="The saved run is unavailable.")
+        return run
 
     @application.post("/discover", response_model=DiscoveryResult)
     async def discover(

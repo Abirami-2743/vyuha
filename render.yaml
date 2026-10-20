@@ -23,17 +23,17 @@ services:
       - key: QLOO_RETRY_BACKOFF_SECONDS
         value: "0.5"
       - key: LLM_BASE_URL
-        value: https://api.mistral.ai/v1
+        value: https://api.groq.com/openai/v1
       - key: LLM_API_KEY
         sync: false
       - key: LLM_MODEL
-        value: mistral-small-latest
+        value: llama-3.3-70b-versatile
       - key: LLM_FALLBACK_BASE_URL
-        value: https://openrouter.ai/api/v1
+        value: https://api.mistral.ai/v1
       - key: LLM_FALLBACK_API_KEY
         sync: false
       - key: LLM_FALLBACK_MODEL
-        value: openrouter/free
+        value: mistral-small-latest
       - key: LLM_TIMEOUT_SECONDS
         value: "45"
       - key: LLM_MAX_RETRIES
@@ -58,5 +58,7 @@ services:
         value: "1000"
       - key: VYUHA_SAVED_RUN_PATH
         value: /etc/secrets/saved-run.json
+      - key: VYUHA_SAVED_RUNS_DIR
+        value: /etc/secrets
       - key: LOG_LEVEL
         value: INFO

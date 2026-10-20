@@ -169,6 +169,15 @@ export interface Analysis {
 export interface SavedRun {
   captured_at: string;
   analysis: Analysis;
+  metadata?: {
+    demo_id: string;
+    identity_selection_rule: string;
+    identity_selections: Array<{
+      kind: "osm" | "qloo" | "seed";
+      selected_name: string;
+      selected_identifier: string;
+    }>;
+  } | null;
 }
 
 export function isSavedRun(value: unknown): value is SavedRun {

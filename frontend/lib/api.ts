@@ -13,8 +13,9 @@ export async function checkApi(): Promise<void> {
   if (!response.ok) throw new Error(`Backend health check failed (${response.status}).`);
 }
 
-export async function getSavedRun(): Promise<SavedRun | null> {
-  const response = await fetch(`${API_URL}/saved-run`, {
+export async function getSavedRun(demoId?: string): Promise<SavedRun | null> {
+  const path = demoId ? `/saved-run/${encodeURIComponent(demoId)}` : "/saved-run";
+  const response = await fetch(`${API_URL}${path}`, {
     cache: "no-store",
     signal: AbortSignal.timeout(65_000),
   });
