@@ -158,7 +158,7 @@ describe("AnalysisView states", () => {
 
     expect(screen.getByText("Analysis in progress")).toBeInTheDocument();
     expect(screen.queryByText(/Waking up the server/)).not.toBeInTheDocument();
-    expect(screen.getByText("Challenge the recommendation")).toBeInTheDocument();
+    expect(screen.getByText("Arguing against the pick")).toBeInTheDocument();
     expect(screen.getByLabelText("running")).toBeInTheDocument();
     expect(screen.getAllByLabelText("not started").length).toBeGreaterThan(0);
   });

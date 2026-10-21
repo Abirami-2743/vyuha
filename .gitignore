@@ -27,6 +27,7 @@ htmlcov/
 # Node / Next.js
 node_modules/
 frontend/.next/
+frontend/AGENTS.md
 frontend/out/
 frontend/.turbo/
 npm-debug.log*

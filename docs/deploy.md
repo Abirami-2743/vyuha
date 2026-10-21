@@ -1,11 +1,11 @@
 # Vyuha deployment guide
 
-This guide deploys the frontend to Vercel and the API to Render's free web-service tier. Keep the GitHub repository private; neither deployment requires publishing it.
+This guide deploys the frontend to Vercel and the API to Render's free web-service tier. The hackathon listing requires a public source repository. Keep credentials and saved Qloo-backed runs private; do not commit them.
 
 ## 1. Deploy the backend to Render
 
-1. Sign in to [Render](https://dashboard.render.com/) using the GitHub account that can access the private Vyuha repository.
-2. Choose **New > Blueprint**, connect GitHub if prompted, select the private `Abirami-2743/vyuha` repository, and approve access to that repository. Render detects the root [`render.yaml`](../render.yaml) and creates the `vyuha-backend` web service.
+1. Sign in to [Render](https://dashboard.render.com/) using the GitHub account that can access the Vyuha repository.
+2. Choose **New > Blueprint**, connect GitHub if prompted, select the public `Abirami-2743/vyuha` repository, and approve access to that repository. Render detects the root [`render.yaml`](../render.yaml) and creates the `vyuha-backend` web service.
 3. Review the Blueprint. It uses the repository root, installs `backend/requirements.txt`, pins Python `3.12.11`, starts `backend.app.main:app` on Render's `$PORT`, enables proxy-header handling, and checks `/health`.
 4. In the service's **Environment** settings, set the secret environment variables:
    - `QLOO_API_KEY`: your Qloo hackathon API key.
@@ -16,7 +16,7 @@ This guide deploys the frontend to Vercel and the API to Render's free web-servi
 
 ## 2. Deploy the frontend to Vercel
 
-1. Sign in to [Vercel](https://vercel.com/dashboard), choose **Add New > Project**, connect GitHub if prompted, select the same private repository, and grant Vercel access to it.
+1. Sign in to [Vercel](https://vercel.com/dashboard), choose **Add New > Project**, connect GitHub if prompted, and select the same public repository.
 2. Set **Root Directory** to `frontend`. Use the detected Next.js framework and default build command (`npm run build`), and keep the project on Vercel's free Hobby tier.
 3. Before the first deploy, add `NEXT_PUBLIC_API_URL` in the project's Environment Variables. Set it to the Render origin, for example `https://vyuha-backend.onrender.com` (no trailing slash). This `NEXT_PUBLIC_` value is intentionally public and is embedded at build time. Do not add Qloo/LLM keys or `VYUHA_SAVED_RUN_PATH` to Vercel.
 4. Deploy. Open the assigned Vercel URL and confirm the page loads.
@@ -24,9 +24,11 @@ This guide deploys the frontend to Vercel and the API to Render's free web-servi
 ## 3. Capture demo runs locally
 
 From the repository root, configure `.env` with `QLOO_API_KEY` and at least one complete
-OpenAI-compatible LLM provider configuration. The default deployment configuration is Groq primary
+OpenAI-compatible API client configuration. The provider setup is Groq (primary)
 (`https://api.groq.com/openai/v1`, model `llama-3.3-70b-versatile`) with Mistral fallback
 (`https://api.mistral.ai/v1`, model `mistral-small-latest`). Keep both API keys private in `.env`.
+The `llama-3.3-70b-versatile` value is the configured Groq model identifier; it does not mean
+Llama is a separate provider in this setup.
 
 Run the actual pipeline for all five input-only briefs:
 
@@ -92,10 +94,10 @@ The Render Blueprint declares the runtime variables and defaults. Secrets are ma
 | `QLOO_TIMEOUT_SECONDS` | No | Qloo request timeout; `30` |
 | `QLOO_MAX_RETRIES` | No | Qloo retry bound; `2` |
 | `QLOO_RETRY_BACKOFF_SECONDS` | No | Qloo retry delay; `0.5` |
-| `LLM_BASE_URL` | No | Primary OpenAI-compatible endpoint; `https://api.groq.com/openai/v1` |
+| `LLM_BASE_URL` | No | Groq (primary) endpoint using the OpenAI-compatible API format; `https://api.groq.com/openai/v1` |
 | `LLM_API_KEY` | **Yes** | Groq primary LLM credential |
 | `LLM_MODEL` | No | `llama-3.3-70b-versatile` |
-| `LLM_FALLBACK_BASE_URL` | No | Mistral endpoint; `https://api.mistral.ai/v1` |
+| `LLM_FALLBACK_BASE_URL` | No | Mistral (fallback) endpoint; `https://api.mistral.ai/v1` |
 | `LLM_FALLBACK_API_KEY` | **Yes** | Mistral fallback LLM credential |
 | `LLM_FALLBACK_MODEL` | No | `mistral-small-latest` |
 | `LLM_TIMEOUT_SECONDS` | No | LLM timeout; `45` |

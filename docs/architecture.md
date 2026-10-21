@@ -23,7 +23,7 @@ Next.js frontend (Vercel)
 FastAPI backend (Render)
     |-- Qloo client: documented hackathon API calls
     |-- Nominatim client: optional user-triggered place lookup
-    |-- one OpenAI-compatible LLM client: primary then fallback
+    |-- one OpenAI-compatible API client: Groq (primary) with Mistral (fallback)
     `-- LangGraph orchestration: bounded, typed nodes
 ```
 
@@ -113,7 +113,7 @@ Follow the [Nominatim Usage Policy](https://operations.osmfoundation.org/policie
 
 ## LLM and decision safeguards
 
-Use only the configured primary and fallback OpenAI-compatible endpoints. Request JSON output and validate it against a Pydantic schema. The LLM can parse briefs and draft evidence-bounded critique/experiments; it cannot create Qloo IDs, results, affinities, or external verification.
+Use Groq (primary) with Mistral (fallback) through the configured OpenAI-compatible API format. Request JSON output and validate it against a Pydantic schema. The LLM can parse briefs and draft evidence-bounded critique/experiments; it cannot create Qloo IDs, results, affinities, or external verification.
 
 The decision layer abstains if:
 
@@ -128,5 +128,5 @@ Fixtures are isolated to tests and never enter the production recommendation pat
 
 - **Verified by current docs:** hackathon API host/header, `GET /search`, `GET /v2/insights`, Search URN values, Insights `filter.type`, entity-interest signals, cross-category affinity, and affinity-score limitations. See the audit in [qloo-capabilities.md](./qloo-capabilities.md).
 - **Verified for the complementary lookup:** Nominatim search parameters and public-instance policy, from the linked official docs.
-- **Verified live for one query:** Qloo key authentication, name resolution, Search `entity_id`, and a non-empty brand-to-place response; the LLM fallback returned valid JSON. The configured primary LLM returned HTTP 429, so its structured-JSON behavior remains unverified.
+- **Verified live for one query:** Qloo key authentication, name resolution, Search `entity_id`, and a non-empty brand-to-place response. Groq (primary) returned HTTP 429 in that recorded probe; Mistral (fallback) returned valid JSON. The captured Groq structured-JSON behavior in that probe remains unverified.
 - **Still requires live validation:** coverage for other queries/categories/locations, no-result handling, exact affinity fields/scales, and primary-provider JSON-mode/rate-limit behavior. See [PROGRESS.md](../PROGRESS.md).

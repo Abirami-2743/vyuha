@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnalysisView } from "@/components/analysis-view";
 import { SourceTag } from "@/components/evidence";
 import { SavedRunBanner } from "@/components/saved-run-banner";
+import { RoutedJudgePage } from "@/components/judge-pages";
 import { analyze, checkApi, getSavedRun } from "@/lib/api";
 import demoDefinitions from "@/lib/demo-definitions.json";
 import type {
@@ -23,6 +24,7 @@ type ChoiceState = {
   qlooEntityId: string;
   seedIds: Record<string, string>;
 };
+type Demo = (typeof demoDefinitions)[number];
 
 const initialBrief = {
   businessName: "",
@@ -259,7 +261,63 @@ export default function Home() {
   const [healthCheckWakingUp, setHealthCheckWakingUp] = useState(false);
   const [analysisWakingUp, setAnalysisWakingUp] = useState(false);
   const [currentRequest, setCurrentRequest] = useState<DiscoveryRequest | null>(null);
+  const [route, setRoute] = useState("/");
+  const [routeReady, setRouteReady] = useState(false);
+  const routeHistory = useRef<string[]>([]);
   const analysisInFlight = useRef(false);
+  const analysisController = useRef<AbortController | null>(null);
+  const cancelRequested = useRef(false);
+
+  const navigate = useCallback((path: string, replace = false) => {
+    if (typeof window !== "undefined") {
+      const currentPath = window.location.pathname;
+      if (currentPath !== path) {
+        if (replace) {
+          window.history.replaceState({ vyuha: true }, "", path);
+          if (routeHistory.current.length) {
+            routeHistory.current[routeHistory.current.length - 1] = path;
+          } else {
+            routeHistory.current.push(path);
+          }
+        } else {
+          window.history.pushState({ vyuha: true }, "", path);
+          routeHistory.current.push(path);
+        }
+      }
+    }
+    setRoute(path);
+  }, []);
+
+  useEffect(() => {
+    window.history.replaceState({ vyuha: true }, "", window.location.pathname);
+    const syncRoute = () => {
+      const nextRoute = window.location.pathname;
+      const previousIndex = routeHistory.current.lastIndexOf(nextRoute);
+      routeHistory.current =
+        previousIndex < 0
+          ? [...routeHistory.current, nextRoute]
+          : routeHistory.current.slice(0, previousIndex + 1);
+      if (analysisController.current && nextRoute !== "/analyze") {
+        cancelRequested.current = true;
+        analysisController.current.abort();
+        analysisController.current = null;
+        analysisInFlight.current = false;
+        setLoading(false);
+      }
+      setRoute(nextRoute);
+      if (nextRoute !== "/analyze") setScreen("landing");
+      setRouteReady(true);
+    };
+    window.addEventListener("popstate", syncRoute);
+    syncRoute();
+    return () => window.removeEventListener("popstate", syncRoute);
+  }, []);
+
+  useEffect(() => {
+    if (route === "/analyze" && !analysisInFlight.current && !analysis) {
+      setScreen("brief");
+    }
+  }, [analysis, route]);
 
   const checkBackend = useCallback(async () => {
     setApiReady(null);
@@ -334,6 +392,8 @@ export default function Home() {
   const submitAnalysis = useCallback(async (request: DiscoveryRequest, demoId?: DemoId) => {
     if (analysisInFlight.current) return;
     analysisInFlight.current = true;
+    cancelRequested.current = false;
+    navigate("/analyze");
     setActiveDemoId(demoId ?? null);
     setCurrentRequest(request);
     setScreen("analysis");
@@ -346,6 +406,7 @@ export default function Home() {
     setTrace([]);
     setAnalysisWakingUp(false);
     const controller = new AbortController();
+    analysisController.current = controller;
     const timeoutId = window.setTimeout(() => controller.abort(), 240_000);
     const wakingTimeoutId = window.setTimeout(() => setAnalysisWakingUp(true), 5_000);
 
@@ -366,12 +427,19 @@ export default function Home() {
           if (event.result) {
             setAnalysis(event.result);
             receivedResult = true;
+            if (
+              event.result.discovery.status !== "needs_user_choice" &&
+              event.result.discovery.business_identity.status !== "needs_user_choice"
+            ) {
+              navigate("/result", true);
+            }
           }
         },
         controller.signal,
       );
       if (!receivedResult) throw new Error("The stream ended before a complete analysis arrived.");
     } catch (error) {
+      if (cancelRequested.current) return;
       const failureMessage =
         controller.signal.aborted
           ? "The analysis timed out while waiting for the backend. Check backend logs and try again."
@@ -399,6 +467,7 @@ export default function Home() {
         }
         setAnalysisIsSaved(true);
         setAnalysisError(failureMessage);
+        navigate("/result", true);
       } else {
         setAnalysisError(
           `${failureMessage} ${
@@ -413,9 +482,10 @@ export default function Home() {
       window.clearTimeout(wakingTimeoutId);
       setAnalysisWakingUp(false);
       analysisInFlight.current = false;
+      analysisController.current = null;
       setLoading(false);
     }
-  }, [savedRun, savedRuns]);
+  }, [navigate, savedRun, savedRuns]);
 
   function createRequest(values: typeof initialBrief = form): DiscoveryRequest | null {
     const minimum = Number(values.budgetMin);
@@ -554,27 +624,87 @@ export default function Home() {
     setProgress(new Map());
     setTrace([]);
     setScreen("analysis");
+    navigate("/result");
+  }
+
+  function runDemo(demo: Demo) {
+    setScreen("analysis");
+    startDemo(demo);
+  }
+
+  function backTarget(): string {
+    if (route.startsWith("/result/partners/")) return "/result/partners";
+    if (route === "/result/partners" || route === "/result/evidence") return "/result";
+    if (route === "/result" || route === "/analyze") return "/demos";
+    if (route === "/about") return "/";
+    return "/";
+  }
+
+  function handleBack() {
+    if (route === "/analyze" && analysisController.current) {
+      cancelRequested.current = true;
+      analysisController.current.abort();
+      analysisController.current = null;
+      analysisInFlight.current = false;
+      setLoading(false);
+    }
+    const target = backTarget();
+    const previousRoute = routeHistory.current[routeHistory.current.length - 2];
+    if (previousRoute === target) {
+      window.history.back();
+    } else {
+      navigate(target, true);
+    }
   }
 
   return (
     <main className="min-h-screen">
       <header className="border-b border-line bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-4 sm:px-8">
+        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-5 py-4 sm:px-8">
+          <button
+            aria-label={`Back to ${backTarget() === "/" ? "home" : backTarget()}`}
+            className="min-h-11 shrink-0 rounded-lg px-2 text-sm font-semibold text-forest hover:bg-paper"
+            onClick={handleBack}
+            type="button"
+          >
+            {route === "/analyze" && loading ? "Cancel run" : "← Back"}
+          </button>
           <button
             aria-label="Vyuha home"
             className="text-lg font-black tracking-tight text-forest"
-            onClick={() => setScreen("landing")}
+            onClick={() => {
+              setScreen("landing");
+              navigate("/");
+            }}
             type="button"
           >
             Vyuha<span className="text-ink">.</span>
           </button>
-          <p className="hidden text-sm text-slate-600 sm:block">
-            Evidence before commitment
-          </p>
+          <nav aria-label="Main navigation" className="flex items-center gap-3 text-sm font-semibold">
+            <button className="min-h-11 text-forest hover:underline" onClick={() => { setScreen("landing"); navigate("/"); }} type="button">Home</button>
+            <button className="min-h-11 text-forest hover:underline" onClick={() => navigate("/about")} type="button">About</button>
+          </nav>
         </div>
       </header>
 
-      {screen === "landing" && (
+      {routeReady && route !== "/analyze" && (
+        <RoutedJudgePage
+          analysis={analysis}
+          isSavedRun={analysisIsSaved}
+          onNavigate={(path) => {
+            if (path === "/analyze") setScreen("brief");
+            navigate(path);
+          }}
+          onRun={runDemo}
+          onViewSaved={viewSavedDemo}
+          route={route}
+          savedRuns={savedRuns}
+          savedRunsLoading={savedRunsLoading}
+          trace={trace}
+        />
+      )}
+
+      {screen === "landing" && route === "/legacy-landing" && (
         <section className="mx-auto max-w-6xl px-5 py-16 sm:px-8 sm:py-24">
           <div className="max-w-4xl">
             <p className="text-xs font-bold uppercase tracking-[0.2em] text-forest">
@@ -734,15 +864,9 @@ export default function Home() {
       )}
 
       {screen === "brief" && (
+        route === "/analyze" &&
         <section className="mx-auto max-w-4xl px-5 py-10 sm:px-8 sm:py-14">
-          <button
-            className="text-sm font-semibold text-forest hover:underline"
-            onClick={() => setScreen("landing")}
-            type="button"
-          >
-            ← Back
-          </button>
-          <p className="mt-8 text-xs font-bold uppercase tracking-widest text-forest">Your brief</p>
+          <p className="text-xs font-bold uppercase tracking-widest text-forest">Your brief</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight">What are you planning?</h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-700">
             Include enough information to identify your business and market. Vyuha sends this brief
@@ -912,6 +1036,7 @@ export default function Home() {
       )}
 
       {screen === "analysis" && (
+        route === "/analyze" &&
         <section className="mx-auto max-w-7xl px-5 py-8 sm:px-8 sm:py-12">
           {analysisIsSaved && activeSavedRun && (
             <SavedRunBanner
@@ -931,10 +1056,7 @@ export default function Home() {
             {!loading && (
               <button
                 className="rounded-lg border border-line bg-white px-4 py-2 text-sm font-semibold hover:bg-paper"
-                onClick={() => {
-                  setActiveDemoId(null);
-                  setScreen("brief");
-                }}
+                onClick={() => { setActiveDemoId(null); setScreen("brief"); }}
                 type="button"
               >
                 Edit brief

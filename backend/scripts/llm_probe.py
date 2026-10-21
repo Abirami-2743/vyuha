@@ -1,4 +1,4 @@
-"""Test configured primary and fallback OpenAI-compatible chat-completions APIs."""
+"""Probe Groq (primary) and Mistral (fallback) chat-completions APIs."""
 
 import json
 import os

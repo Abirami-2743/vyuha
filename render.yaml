@@ -22,6 +22,7 @@ services:
         value: "2"
       - key: QLOO_RETRY_BACKOFF_SECONDS
         value: "0.5"
+      # Groq (primary) with Mistral (fallback); model identifiers are provider configuration.
       - key: LLM_BASE_URL
         value: https://api.groq.com/openai/v1
       - key: LLM_API_KEY

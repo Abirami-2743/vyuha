@@ -15,15 +15,13 @@ import { EvidenceLine, SourceTag } from "@/components/evidence";
 export type ViewState = "loading" | "empty" | "error" | "partial" | "results";
 
 const stageLabels = [
-  ["discovery_identity", "Resolve identity"],
-  ["discovery_candidates", "Discover candidates"],
-  ["discovery_verification", "Verify listings"],
-  ["discovery_comparison", "Compare evidence"],
-  ["critic", "Challenge the recommendation"],
-  ["decision", "Make a decision"],
-  ["experiment", "Design a small test"],
-  ["outreach", "Prepare outreach"],
-  ["analysis", "Complete analysis"],
+  ["discovery_identity", "Understanding your business"],
+  ["discovery_candidates", "Asking Qloo what your customers like"],
+  ["discovery_verification", "Checking real places on the map"],
+  ["discovery_comparison", "Comparing possible partners"],
+  ["critic", "Arguing against the pick"],
+  ["decision", "Deciding whether it is safe to test"],
+  ["experiment", "Suggesting a small first test"],
 ] as const;
 
 const criteria: Array<[keyof CandidateDecision["candidate"], string]> = [

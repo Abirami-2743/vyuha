@@ -223,7 +223,7 @@ def _discovery(
     )
 
 
-def _openai_reply(request: httpx.Request, *, mode: str = "valid") -> httpx.Response:
+def _compatible_api_reply(request: httpx.Request, *, mode: str = "valid") -> httpx.Response:
     body = json.loads(request.content)
     prompt = body["messages"][1]["content"]
     marker = "INPUT_JSON:\n"
@@ -259,7 +259,7 @@ def _engine(*, mode: str = "unavailable") -> tuple[AnalysisEngine, LLMClient]:
     def respond(request: httpx.Request) -> httpx.Response:
         if mode == "unavailable":
             return httpx.Response(503)
-        return _openai_reply(request, mode=mode)
+        return _compatible_api_reply(request, mode=mode)
 
     client = LLMClient(
         settings,
@@ -517,7 +517,7 @@ def test_candidate_prompt_injection_is_not_sent_to_critic_or_followed() -> None:
 
     def respond(request: httpx.Request) -> httpx.Response:
         seen_prompts.append(json.loads(request.content)["messages"][1]["content"])
-        return _openai_reply(request)
+        return _compatible_api_reply(request)
 
     async def exercise() -> AnalysisResult:
         client = LLMClient(

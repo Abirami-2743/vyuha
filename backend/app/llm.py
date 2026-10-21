@@ -1,4 +1,4 @@
-"""Single OpenAI-compatible structured-output client with provider fallback."""
+"""Structured-output client using Groq (primary) and Mistral (fallback)."""
 
 from __future__ import annotations
 

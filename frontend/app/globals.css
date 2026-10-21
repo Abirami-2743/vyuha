@@ -73,7 +73,11 @@ summary:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .stagger-enter > * {
-    animation: none;
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
   }
 }

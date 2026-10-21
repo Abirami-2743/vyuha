@@ -1,6 +1,6 @@
 # Vyuha progress — deployment readiness
 
-Updated: October 18, 2026
+Updated: October 21, 2026
 
 ## Done
 
@@ -68,3 +68,25 @@ Updated: October 18, 2026
 - Backend checks: pytest 64 passed; Ruff passed after a line-length correction; mypy succeeded for 14 source files. Frontend lint, typecheck, and production build succeeded; Vitest passed all 16 tests after refining one disclosure-visibility assertion.
 - Browser verified using the existing dated real saved Blue Bottle analysis (not a new live run): 375px viewport without horizontal overflow (document width 360px), three shortlist cards, keyboard-accessible evidence summary with visible focus outline, reduced-motion animation disabled, and 16.15:1 summary-text contrast on white.
 - Powell’s Books / Portland seed-brand exploration was not run; the optional live demo was left unchanged. No commit or deployment was made.
+
+## Judge-first redesign and LLM copy correction — October 21, 2026
+
+- Confirmed the official 2026 Devpost criteria in the browser: Technological Implementation, Design, Potential Impact, and Quality of the Idea (equally weighted).
+- Updated provider descriptions to Groq (primary) with Mistral (fallback) in the developer instructions, environment example, architecture, deployment guide, and progress record. Kept provider/model configuration values unchanged.
+- Added route-backed Home, demo gallery, verdict, partner list/details, evidence, and About views. Reused the existing five input-only briefs, live analysis stream, and saved-run contracts; added browser-history handling, explicit Back/Home navigation, cancel-on-back, and plain-language progress steps.
+- Reworded the home pitch to describe Qloo taste signals without asserting shared customers; verdict reasons now require a supported/partial criterion with evidence. Direct-link empty states route back to demos, and the evidence timeline is collapsed until requested.
+- Verified the five private saved demo runs are available through the local API and marked non-live in the gallery/result flow. Confirmed that a live request can still fall back to the saved result when the backend is unavailable; no live analysis was triggered during this verification.
+- Browser verified judge routes at a 375px viewport with no horizontal overflow; each route shows Back and Home, browser history navigation works, visible keyboard focus is present, and reduced-motion disables animation. Qloo comparison details and evidence are presented through disclosures.
+- Final frontend lint, typecheck, tests, and production build passed; targeted backend LLM tests passed. No commit or deployment was made.
+- No commit or deployment was made.
+
+## Review fixes and final verification — October 21, 2026
+
+- Resolved the four latest review findings: partner details now use an evidence-backed positive rationale or an honest fallback; Back uses in-app history when available and safe route replacement on direct links; direct routes do not flash the Home page before route sync; the unsupported-rationale test scopes its assertion and also covers partner details.
+- Kept the candidate-debate test timeout unchanged. It passes alone in 0.83s and in the full suite; the earlier timeout occurred when frontend tests competed with concurrent builds, type checks, backend tests, and dev servers.
+- Final frontend checks, run in the requested order: `npm run lint` passed; `npm run typecheck` passed; `npm run test` passed (4 files, 22 tests); `npm run build` passed (optimized Next.js build).
+- Final backend checks: `python -m pytest tests -q` passed (64 tests); `python -m ruff check backend tests --config backend\pyproject.toml` passed; `python -m mypy --config-file backend\pyproject.toml backend\app` passed (14 source files).
+- Browser checked Home, Demos, Analyze, Verdict, Partners, Partner Detail, Evidence, and About at a 375px viewport. Every page showed Back and Home, Back navigated to its expected destination, browser Back from Partner Detail returned to the Verdict without a detail-page loop, and each page had equal document client/scroll widths (no horizontal overflow). The Home hero states the product plainly; a saved, non-live result clearly named the recommended partner and showed its reason, risk, first test, Qloo caveat, and real run counts.
+- Repository provider-text search found no incorrect provider names in source. Remaining Google mentions describe a hackathon form and a historical web search; OpenAI mentions describe the compatible API format, not the provider; `llama-3.3-70b-versatile` is the existing Groq model identifier and was not changed. Provider descriptions consistently identify Groq as primary and Mistral as fallback.
+- `.next/`, `*.tsbuildinfo`, and the generated `frontend/AGENTS.md` are ignored by Git; the tracked `frontend/next-env.d.ts` matches its original contents. Generated files do not appear in `git status`.
+- No fresh live LLM/Qloo analysis was run. Browser result checks used the existing private saved run and displayed the non-live label. No commit or deployment was made.

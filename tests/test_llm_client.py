@@ -47,7 +47,7 @@ async def no_sleep(_: float) -> None:
     return None
 
 
-def openai_response(content: str, status_code: int = 200) -> httpx.Response:
+def compatible_chat_response(content: str, status_code: int = 200) -> httpx.Response:
     return httpx.Response(
         status_code,
         json={"choices": [{"message": {"content": content}}]},
@@ -65,7 +65,7 @@ def test_primary_rate_limit_uses_fallback_with_structured_output() -> None:
         body = json.loads(request.content)
         assert body["response_format"] == {"type": "json_object"}
         assert body["model"] == "fixture-fallback-model"
-        return openai_response('{"answer":"fixture response"}')
+        return compatible_chat_response('{"answer":"fixture response"}')
 
     async def exercise() -> StructuredResult:
         async with LLMClient(
@@ -92,9 +92,9 @@ def test_invalid_output_retries_same_provider_before_accepting_schema() -> None:
         body = json.loads(request.content)
         assert "JSON Schema:" in body["messages"][1]["content"]
         if calls == 1:
-            return openai_response('{"answer":3}')
+            return compatible_chat_response('{"answer":3}')
         assert "previous response" in body["messages"][1]["content"]
-        return openai_response('{"answer":"valid"}')
+        return compatible_chat_response('{"answer":"valid"}')
 
     async def exercise() -> StructuredResult:
         async with LLMClient(
@@ -121,7 +121,7 @@ def test_retry_after_is_respected_and_provider_calls_are_spaced() -> None:
         calls += 1
         if calls == 1:
             return httpx.Response(429, headers={"Retry-After": "3"})
-        return openai_response('{"answer":"retried"}')
+        return compatible_chat_response('{"answer":"retried"}')
 
     async def sleep(delay: float) -> None:
         delays.append(delay)
@@ -154,7 +154,7 @@ def test_minimum_interval_is_enforced_between_provider_requests() -> None:
         calls += 1
         if calls == 1:
             return httpx.Response(429, headers={"Retry-After": "0"})
-        return openai_response('{"answer":"spaced"}')
+        return compatible_chat_response('{"answer":"spaced"}')
 
     async def sleep(delay: float) -> None:
         delays.append(delay)
@@ -186,7 +186,7 @@ def test_long_retry_after_falls_back_instead_of_retrying_too_early() -> None:
         calls.append(request.url.host)
         if request.url.host == "primary.test":
             return httpx.Response(429, headers={"Retry-After": "60"})
-        return openai_response('{"answer":"fallback"}')
+        return compatible_chat_response('{"answer":"fallback"}')
 
     async def exercise() -> StructuredResult:
         async with LLMClient(
@@ -203,7 +203,7 @@ def test_long_retry_after_falls_back_instead_of_retrying_too_early() -> None:
 
 def test_invalid_output_after_retry_falls_back_and_reports_if_both_fail() -> None:
     def handle(request: httpx.Request) -> httpx.Response:
-        return openai_response('{"wrong":"shape"}')
+        return compatible_chat_response('{"wrong":"shape"}')
 
     async def exercise() -> None:
         async with LLMClient(
