@@ -345,6 +345,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok", "service": "vyuha"}
 
+    @application.get("/")
+    async def root() -> dict[str, str]:
+        return {"service": "vyuha-api", "status": "ok"}
+
     @application.get("/saved-run", response_model=SavedRunResponse)
     async def saved_run() -> SavedRunResponse:
         configured_path = configured.vyuha_saved_run_path

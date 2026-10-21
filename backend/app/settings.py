@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     llm_max_retries: int = Field(default=1, ge=0, le=3)
     llm_retry_backoff_seconds: float = Field(default=0.5, ge=0, le=10)
     llm_min_request_interval_seconds: float = Field(default=1, ge=0, le=60)
-    llm_invalid_output_retries: int = Field(default=1, ge=0, le=2)
     llm_http_referer: str | None = Field(default=None, max_length=500)
     llm_app_title: str | None = Field(default="Vyuha", max_length=100)
 

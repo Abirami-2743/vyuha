@@ -23,7 +23,7 @@ Next.js frontend (Vercel)
 FastAPI backend (Render)
     |-- Qloo client: documented hackathon API calls
     |-- Nominatim client: optional user-triggered place lookup
-    |-- one OpenAI-compatible API client: Groq (primary) with Mistral (fallback)
+    |-- one OpenAI-compatible API client: Groq (primary model) with a second Groq model as fallback
     `-- LangGraph orchestration: bounded, typed nodes
 ```
 
@@ -64,7 +64,16 @@ Empty results, unsupported entity types, and timeouts must remain visible as par
 3. **C — independent verification and baseline search:** search Nominatim by each returned Qloo name and market, accepting a local match only when name and city exactly match. Keep candidates with no exact local OSM match, mark them unverified, preserve their Qloo evidence, and list missing evidence. Separately make one user-triggered category search for the stated industry in the requested market. Include up to three results only when returned OSM `category` or `type` exactly matches that industry and the address matches the requested city. These OSM-derived candidates are identity/location verified as OSM places; this does not establish current operation, availability, or willingness to collaborate.
 4. **D — conventional baseline and comparison:** pass every Qloo candidate and each OSM category baseline through the comparison and critic rules. The OSM-only baseline is clearly labeled as having no Qloo taste query, so it is not like-for-like; it remains `SKIP` unless existing rules are met, and the absence of taste evidence is not relaxed. If category search finds no matching local result, or lookup fails, report the limitation. If that standard does not produce a candidate, say no defensible baseline was found while still returning the unexpected candidates. Never rank cross-query affinity values; in this implementation the unexpected and conventional classifications come from the same brand-to-place Insights response.
 
-The comparison matrix records evidence relevance, query-relative taste signal, tentative AI-interpreted complementarity and goal alignment, possible category overlap, location/logistical suitability, budget compatibility, and uncertainty. Unavailable prices, operating status, event capacity, contacts, and willingness are unknown. The LLM receives only the brief and retrieved candidate evidence as untrusted data, returns structured hypotheses with evidence references, and cannot add candidates or verification claims. Calls are serialized and spaced; 429 `Retry-After` is honored, and a long wait switches to the fallback rather than retrying early.
+The comparison matrix records evidence relevance, query-relative taste signal, tentative AI-interpreted complementarity and goal alignment, possible category overlap, location/logistical suitability, budget compatibility, and uncertainty. Unavailable prices, operating status, event capacity, contacts, and willingness are unknown. The LLM receives only the brief and retrieved candidate evidence as untrusted data, returns structured hypotheses with evidence references, and cannot add candidates or verification claims. Calls are serialized and spaced. A primary 429 or timeout switches immediately to the fallback; one fallback 429 is retried after a short delay.
+
+### LLM calls per full analysis
+
+- Stages A–C make no LLM calls.
+- Stage D makes at most one candidate-interpretation call, batched across all Qloo-backed candidates; it skips that call when there are none.
+- The critic makes one call for the combined findings.
+- Decision, experiment, and outreach use deterministic code and make no LLM calls.
+
+A full run with candidates therefore uses two logical LLM generations, not one call per candidate. That batching already existed, so this change does not reduce the normal call count without reducing review coverage. On a primary 429 or timeout, the same generation switches directly to the fallback model. A fallback 429 gets one short retry; every provider's JSON is schema-validated before it can be used.
 
 Nominatim requests are fixed to its official search host, user-triggered, limited to five results, and paced to at most one request per second in a single backend process. A returned exact-name/locality record supports only that OSM lists such a place. The public service is best-effort, may change, and is not a business registry or operating-status service. A multi-process deployment must enforce the per-application rate limit across workers before using the public endpoint.
 
@@ -113,7 +122,7 @@ Follow the [Nominatim Usage Policy](https://operations.osmfoundation.org/policie
 
 ## LLM and decision safeguards
 
-Use Groq (primary) with Mistral (fallback) through the configured OpenAI-compatible API format. Request JSON output and validate it against a Pydantic schema. The LLM can parse briefs and draft evidence-bounded critique/experiments; it cannot create Qloo IDs, results, affinities, or external verification.
+Use Groq (primary model) with a second Groq model as fallback through the configured OpenAI-compatible API format. Model IDs come from environment variables. Request JSON output and validate it against a Pydantic schema. The LLM can parse briefs and draft evidence-bounded critique/experiments; it cannot create Qloo IDs, results, affinities, or external verification.
 
 The decision layer abstains if:
 
@@ -128,5 +137,5 @@ Fixtures are isolated to tests and never enter the production recommendation pat
 
 - **Verified by current docs:** hackathon API host/header, `GET /search`, `GET /v2/insights`, Search URN values, Insights `filter.type`, entity-interest signals, cross-category affinity, and affinity-score limitations. See the audit in [qloo-capabilities.md](./qloo-capabilities.md).
 - **Verified for the complementary lookup:** Nominatim search parameters and public-instance policy, from the linked official docs.
-- **Verified live for one query:** Qloo key authentication, name resolution, Search `entity_id`, and a non-empty brand-to-place response. Groq (primary) returned HTTP 429 in that recorded probe; Mistral (fallback) returned valid JSON. The captured Groq structured-JSON behavior in that probe remains unverified.
+- **Verified live for one query:** Qloo key authentication, name resolution, Search `entity_id`, and a non-empty brand-to-place response. The configured Groq primary and second-model fallback behavior still requires a fresh live verification.
 - **Still requires live validation:** coverage for other queries/categories/locations, no-result handling, exact affinity fields/scales, and primary-provider JSON-mode/rate-limit behavior. See [PROGRESS.md](../PROGRESS.md).

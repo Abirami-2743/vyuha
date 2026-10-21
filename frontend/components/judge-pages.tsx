@@ -168,7 +168,7 @@ export function HomePage({ onNavigate }: { onNavigate: (path: string) => void })
         {[
           ["①", "You describe your business", "Tell Vyuha who you are, where you work, and what you want to try."],
           ["②", "Vyuha checks Qloo taste data", "Qloo helps find possible partners from another category."],
-          ["③", "Vyuha argues back", "It checks risks and gives you a low-cost idea to test first."],
+          ["③", "Vyuha argues back", "It checks risks and suggests a small test only when the evidence supports testing."],
         ].map(([icon, title, text]) => (
           <li className="rounded-xl border border-line bg-white p-5" key={title}>
             <span aria-hidden="true" className="text-2xl font-bold text-forest">{icon}</span>
@@ -179,7 +179,7 @@ export function HomePage({ onNavigate }: { onNavigate: (path: string) => void })
       </ol>
 
       <p className="mt-6 text-sm font-semibold text-slate-700">
-        Powered by Qloo taste data · Groq (primary) with Mistral (fallback) · Every claim shows where it came from
+        Uses Qloo taste clues when available · Groq (primary model) with a second Groq model as fallback · Evidence is labeled by source or marked unknown
       </p>
 
       <section className="mt-8 rounded-xl border border-line bg-white p-5 sm:p-7">
@@ -236,7 +236,7 @@ export function DemoGallery({
                     onClick={() => onViewSaved(demo.id)}
                     type="button"
                   >
-                    View saved result (not live)
+                    View saved result, not live
                   </button>
                 ) : savedRunsLoading ? (
                   <span className="flex min-h-11 items-center text-xs text-slate-600">
@@ -250,7 +250,7 @@ export function DemoGallery({
               </div>
               {saved && (
                 <p className="mt-2 text-xs text-slate-600">
-                  Saved capture: {new Date(saved.captured_at).toLocaleDateString()}
+                  Saved result, not live · captured {new Date(saved.captured_at).toLocaleDateString()}
                 </p>
               )}
             </li>
@@ -263,11 +263,9 @@ export function DemoGallery({
 
 export function VerdictPage({
   analysis,
-  isSavedRun,
   onNavigate,
 }: {
   analysis: Analysis | null;
-  isSavedRun: boolean;
   onNavigate: (path: string) => void;
 }) {
   if (!analysis) {
@@ -300,11 +298,6 @@ export function VerdictPage({
 
   return (
     <section className="mx-auto max-w-4xl px-5 py-8 sm:px-8 sm:py-12">
-      {isSavedRun && (
-        <p className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950">
-          Saved result — not live
-        </p>
-      )}
       <article className="rounded-2xl border border-forest/20 bg-white p-6 sm:p-8">
         <p className="text-xs font-bold uppercase tracking-widest text-forest">Vyuha&apos;s decision</p>
         <h1 className="mt-3 text-3xl font-bold leading-tight tracking-tight sm:text-4xl">
@@ -343,7 +336,7 @@ export function VerdictPage({
       </article>
       <div className="mt-5 flex flex-wrap gap-3">
         <button className={actionButtonClass(true)} onClick={() => onNavigate("/result/partners")} type="button">
-          See the top 3 partners
+          Review possible partners
         </button>
         <button className={actionButtonClass()} onClick={() => onNavigate("/result/evidence")} type="button">
           How did Vyuha decide?
@@ -458,12 +451,10 @@ function NoAnalysis({ onNavigate }: { onNavigate: (path: string) => void }) {
 export function PartnerDetailPage({
   analysis,
   route,
-  isSavedRun,
   onNavigate,
 }: {
   analysis: Analysis | null;
   route: string;
-  isSavedRun: boolean;
   onNavigate: (path: string) => void;
 }) {
   const [message, setMessage] = useState<string | null>(null);
@@ -489,11 +480,6 @@ export function PartnerDetailPage({
   const currentMessage = message ?? (outreach ? `${outreach.subject}\n\n${outreach.body}` : "");
   return (
     <section className="mx-auto max-w-4xl px-5 py-8 sm:px-8 sm:py-12">
-      {isSavedRun && (
-        <p className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950">
-          Saved result — not live
-        </p>
-      )}
       <p className="text-xs font-bold uppercase tracking-widest text-forest">Possible partner</p>
       <h1 className="mt-2 break-words text-3xl font-bold">{partner.name}</h1>
       <p className="mt-2 text-sm font-semibold text-slate-700">{ratingLabel(item.final_rating)}</p>
@@ -603,12 +589,10 @@ export function PartnerDetailPage({
 export function EvidencePage({
   analysis,
   trace,
-  isSavedRun,
   onNavigate,
 }: {
   analysis: Analysis | null;
   trace: TraceStep[];
-  isSavedRun: boolean;
   onNavigate: (path: string) => void;
 }) {
   if (!analysis) return <NoAnalysis onNavigate={onNavigate} />;
@@ -631,7 +615,6 @@ export function EvidencePage({
 
   return (
     <section className="mx-auto max-w-4xl px-5 py-8 sm:px-8 sm:py-12">
-      {isSavedRun && <p className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950">Saved result — not live</p>}
       <p className="text-xs font-bold uppercase tracking-widest text-forest">Decision details</p>
       <h1 className="mt-2 text-3xl font-bold">How Vyuha decided</h1>
       <p className="mt-2 text-sm leading-6 text-slate-700">
@@ -731,12 +714,9 @@ export function AboutPage() {
         <section>
           <h2 className="font-bold">What Qloo contributes</h2>
           <p className="mt-1 text-sm leading-6 text-slate-700">
-            Vyuha uses Qloo&apos;s business lookup and{" "}
-            <span title="Qloo's tool for finding taste connections across different kinds of businesses">
-              cross-category Insights
-            </span>{" "}
-            to find taste connections between a business and possible partners. These clues do not
-            prove that customers overlap or intend to buy.
+            When Qloo results are available, Vyuha uses them to look for taste connections between
+            different kinds of businesses. These clues do not prove that customers overlap or intend
+            to buy.
           </p>
         </section>
         <section>
@@ -745,20 +725,10 @@ export function AboutPage() {
             <span title="Python web framework for the backend API">FastAPI</span> ·{" "}
             <span title="Framework that coordinates the agent's workflow steps">LangGraph</span> ·{" "}
             <span title="React framework used for the website">Next.js</span> ·{" "}
-            <span title="Primary language model service">Groq (primary)</span> with{" "}
-            <span title="Backup language model service if Groq is unavailable">Mistral (fallback)</span> ·{" "}
+            <span title="Primary language model service">Groq (primary model)</span> with{" "}
+            <span title="Second Groq model used if the primary is unavailable">a second Groq model as fallback</span> ·{" "}
             <span title="Hosts the backend API">Render</span> ·{" "}
             <span title="Hosts the website">Vercel</span>
-          </p>
-        </section>
-        <section>
-          <h2 className="font-bold">Evaluation set counts</h2>
-          <p className="mt-1 text-sm leading-6 text-slate-700">
-            Saved analyses captured October 18, 2026: 5 runs · 2 cases where Vyuha said no · 15 partners
-            downgraded by the devil&apos;s advocate · 0 claims without a source reference.
-          </p>
-          <p className="mt-1 text-xs leading-5 text-slate-600">
-            Counts describe this fixed saved set only; they are not performance estimates.
           </p>
         </section>
         <section>
@@ -795,7 +765,6 @@ export function RoutedJudgePage({
   trace,
   savedRuns,
   savedRunsLoading,
-  isSavedRun,
   onNavigate,
   onRun,
   onViewSaved,
@@ -805,7 +774,6 @@ export function RoutedJudgePage({
   trace: TraceStep[];
   savedRuns: Partial<Record<string, SavedRun>>;
   savedRunsLoading: boolean;
-  isSavedRun: boolean;
   onNavigate: (path: string) => void;
   onRun: (demo: Demo) => void;
   onViewSaved: (id: Demo["id"]) => void;
@@ -815,11 +783,11 @@ export function RoutedJudgePage({
     return <DemoGallery savedRuns={savedRuns} savedRunsLoading={savedRunsLoading} onRun={onRun} onViewSaved={onViewSaved} />;
   }
   if (route === "/about") return <AboutPage />;
-  if (route === "/result") return <VerdictPage analysis={analysis} isSavedRun={isSavedRun} onNavigate={onNavigate} />;
+  if (route === "/result") return <VerdictPage analysis={analysis} onNavigate={onNavigate} />;
   if (route === "/result/partners") return <PartnersPage analysis={analysis} onNavigate={onNavigate} />;
   if (route.startsWith("/result/partners/")) {
-    return <PartnerDetailPage analysis={analysis} route={route} isSavedRun={isSavedRun} onNavigate={onNavigate} />;
+    return <PartnerDetailPage analysis={analysis} route={route} onNavigate={onNavigate} />;
   }
-  if (route === "/result/evidence") return <EvidencePage analysis={analysis} trace={trace} isSavedRun={isSavedRun} onNavigate={onNavigate} />;
+  if (route === "/result/evidence") return <EvidencePage analysis={analysis} trace={trace} onNavigate={onNavigate} />;
   return null;
 }

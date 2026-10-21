@@ -36,11 +36,14 @@ def make_settings(**overrides: object) -> Settings:
 def test_health_endpoint_and_cors_configuration() -> None:
     settings = make_settings(cors_origins="https://vyuha.example,http://localhost:3000")
     with TestClient(create_app(settings)) as client:
+        root_response = client.get("/")
         response = client.get(
             "/health",
             headers={"Origin": "https://vyuha.example"},
         )
 
+    assert root_response.status_code == 200
+    assert root_response.json() == {"service": "vyuha-api", "status": "ok"}
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "service": "vyuha"}
     assert response.headers["access-control-allow-origin"] == "https://vyuha.example"

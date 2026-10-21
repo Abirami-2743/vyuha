@@ -41,7 +41,6 @@ def make_settings() -> Settings:
             "llm_fallback_api_key": None,
             "llm_fallback_model": None,
             "llm_max_retries": 0,
-            "llm_invalid_output_retries": 0,
             "llm_min_request_interval_seconds": 0,
         }
     )

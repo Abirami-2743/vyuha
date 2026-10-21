@@ -688,20 +688,29 @@ export default function Home() {
       </header>
 
       {routeReady && route !== "/analyze" && (
-        <RoutedJudgePage
-          analysis={analysis}
-          isSavedRun={analysisIsSaved}
-          onNavigate={(path) => {
-            if (path === "/analyze") setScreen("brief");
-            navigate(path);
-          }}
-          onRun={runDemo}
-          onViewSaved={viewSavedDemo}
-          route={route}
-          savedRuns={savedRuns}
-          savedRunsLoading={savedRunsLoading}
-          trace={trace}
-        />
+        <>
+          {route.startsWith("/result") && analysisIsSaved && activeSavedRun && (
+            <div className="mx-auto max-w-7xl px-5 pt-6 sm:px-8">
+              <SavedRunBanner
+                capturedAt={activeSavedRun.captured_at}
+                liveError={analysisError}
+              />
+            </div>
+          )}
+          <RoutedJudgePage
+            analysis={analysis}
+            onNavigate={(path) => {
+              if (path === "/analyze") setScreen("brief");
+              navigate(path);
+            }}
+            onRun={runDemo}
+            onViewSaved={viewSavedDemo}
+            route={route}
+            savedRuns={savedRuns}
+            savedRunsLoading={savedRunsLoading}
+            trace={trace}
+          />
+        </>
       )}
 
       {screen === "landing" && route === "/legacy-landing" && (
@@ -789,7 +798,7 @@ export default function Home() {
                     <p className="mt-2 flex-1 text-sm leading-6 text-slate-700">{demo.watchFor}</p>
                     {saved && (
                       <p className="mt-3 text-xs text-slate-600">
-                        Saved capture: {new Date(saved.captured_at).toLocaleDateString()}
+                        Saved result, not live · captured {new Date(saved.captured_at).toLocaleDateString()}
                       </p>
                     )}
                     <div className="mt-4 flex flex-wrap gap-2">
@@ -806,7 +815,7 @@ export default function Home() {
                           onClick={() => viewSavedDemo(demo.id)}
                           type="button"
                         >
-                          View saved run
+                          View saved result, not live
                         </button>
                       ) : savedRunsLoading ? (
                         <span className="flex min-h-11 items-center px-2 text-xs text-slate-500">

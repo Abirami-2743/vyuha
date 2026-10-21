@@ -11,9 +11,9 @@ export function SavedRunBanner({
       role="status"
     >
       <p className="font-bold">
-        Saved run from {new Date(capturedAt).toLocaleString()}, not live
+        Saved result, not live · captured {new Date(capturedAt).toLocaleString()}
       </p>
-      {liveError && <p>Live analysis unavailable: {liveError}</p>}
+      {liveError && <p>{liveError}</p>}
     </div>
   );
 }

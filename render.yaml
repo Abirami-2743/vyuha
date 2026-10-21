@@ -22,19 +22,19 @@ services:
         value: "2"
       - key: QLOO_RETRY_BACKOFF_SECONDS
         value: "0.5"
-      # Groq (primary) with Mistral (fallback); model identifiers are provider configuration.
+      # Groq primary model with a second Groq model as fallback.
       - key: LLM_BASE_URL
         value: https://api.groq.com/openai/v1
       - key: LLM_API_KEY
         sync: false
       - key: LLM_MODEL
-        value: llama-3.3-70b-versatile
+        sync: false
       - key: LLM_FALLBACK_BASE_URL
-        value: https://api.mistral.ai/v1
+        value: https://api.groq.com/openai/v1
       - key: LLM_FALLBACK_API_KEY
         sync: false
       - key: LLM_FALLBACK_MODEL
-        value: mistral-small-latest
+        sync: false
       - key: LLM_TIMEOUT_SECONDS
         value: "45"
       - key: LLM_MAX_RETRIES
@@ -43,14 +43,10 @@ services:
         value: "0.5"
       - key: LLM_MIN_REQUEST_INTERVAL_SECONDS
         value: "1"
-      - key: LLM_INVALID_OUTPUT_RETRIES
-        value: "1"
-      - key: LLM_HTTP_REFERER
-        value: http://localhost:3000
       - key: LLM_APP_TITLE
         value: Vyuha
       - key: CORS_ORIGINS
-        value: http://localhost:3000,http://127.0.0.1:3000
+        sync: false
       - key: MAX_REQUEST_BYTES
         value: "1048576"
       - key: ANALYSIS_PER_IP_DAILY_LIMIT

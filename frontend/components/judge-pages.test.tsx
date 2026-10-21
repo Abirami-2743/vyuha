@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DemoGallery,
   EvidencePage,
+  AboutPage,
   HomePage,
   PartnerDetailPage,
   PartnersPage,
@@ -99,9 +100,17 @@ describe("judge-first pages", () => {
 
     expect(screen.getByText(/Small businesses guess who to partner with/)).toBeInTheDocument();
     expect(screen.queryByText(/whose customers already love what yours love/)).not.toBeInTheDocument();
-    expect(screen.getByText(/Groq \(primary\) with Mistral \(fallback\)/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Groq \(primary model\) with a second Groq model as fallback/),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try a demo" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try your own business" })).toBeInTheDocument();
+  });
+
+  it("does not show hardcoded historical evaluation counts as current app metrics", () => {
+    render(<AboutPage />);
+
+    expect(screen.queryByText(/Evaluation set counts/)).not.toBeInTheDocument();
   });
 
   it("shows five real brief cards and labels saved runs as not live", () => {
@@ -120,7 +129,7 @@ describe("judge-first pages", () => {
   });
 
   it("frames an unsupported result as an honest refusal to guess", () => {
-    render(<VerdictPage analysis={emptyAnalysis} isSavedRun={false} onNavigate={vi.fn()} />);
+    render(<VerdictPage analysis={emptyAnalysis} onNavigate={vi.fn()} />);
 
     expect(screen.getByRole("heading", { name: "Vyuha says no safe partner found" })).toBeInTheDocument();
     expect(screen.getByText(/refuses to guess/)).toBeInTheDocument();
@@ -129,7 +138,7 @@ describe("judge-first pages", () => {
 
   it("offers a usable demo link from a directly opened partner URL", () => {
     const navigate = vi.fn();
-    render(<PartnerDetailPage analysis={null} isSavedRun={false} onNavigate={navigate} route="/result/partners/missing" />);
+    render(<PartnerDetailPage analysis={null} onNavigate={navigate} route="/result/partners/missing" />);
 
     screen.getByRole("button", { name: "Choose a demo" }).click();
 
@@ -156,7 +165,6 @@ describe("judge-first pages", () => {
     render(
       <PartnerDetailPage
         analysis={analysis}
-        isSavedRun={false}
         onNavigate={vi.fn()}
         route="/result/partners/partner-1"
       />,
@@ -170,10 +178,9 @@ describe("judge-first pages", () => {
     render(
       <EvidencePage
         analysis={emptyAnalysis}
-        isSavedRun={false}
         onNavigate={vi.fn()}
         trace={[
-          { name: "Plan", duration_ms: 1, result_count: 7, http_statuses: [] },
+          { name: "Plan", duration_ms: 1, result_count: null, http_statuses: [] },
           { name: "Qloo search", duration_ms: 1, result_count: 2, http_statuses: [200] },
           { name: "Qloo insights", duration_ms: 1, result_count: 1, http_statuses: [200] },
           { name: "Map verification", duration_ms: 1, result_count: 1, http_statuses: [200] },

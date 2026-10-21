@@ -1,4 +1,4 @@
-"""Probe Groq (primary) and Mistral (fallback) chat-completions APIs."""
+"""Probe the configured Groq primary and fallback model chat-completions APIs."""
 
 import json
 import os
@@ -42,7 +42,7 @@ def probe_provider(name: str, prefix: str) -> bool:
 
     parsed_url = urlparse(base_url)
     if (
-        parsed_url.scheme not in {"http", "https"}
+        parsed_url.scheme != "https"
         or not parsed_url.hostname
         or parsed_url.username
         or parsed_url.password

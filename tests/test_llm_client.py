@@ -33,7 +33,6 @@ def make_settings(**overrides: object) -> Settings:
         "llm_fallback_model": "fixture-fallback-model",
         "llm_max_retries": 0,
         "llm_min_request_interval_seconds": 0,
-        "llm_invalid_output_retries": 1,
     }
     values.update(overrides)
     return Settings.model_validate(values)
@@ -73,7 +72,7 @@ def test_primary_rate_limit_uses_fallback_with_structured_output() -> None:
             transport=httpx.MockTransport(handle),
         ) as client:
             return await client.generate(
-                "Use only the supplied fixture.", StructuredResult
+                "Use only the supplied fixture.", StructuredResult, step="test"
             )
 
     result = run(exercise())
@@ -83,7 +82,7 @@ def test_primary_rate_limit_uses_fallback_with_structured_output() -> None:
     assert TEST_FALLBACK_KEY not in repr(result)
 
 
-def test_invalid_output_retries_same_provider_before_accepting_schema() -> None:
+def test_invalid_primary_output_retries_once_on_fallback() -> None:
     calls = 0
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -93,34 +92,32 @@ def test_invalid_output_retries_same_provider_before_accepting_schema() -> None:
         assert "JSON Schema:" in body["messages"][1]["content"]
         if calls == 1:
             return compatible_chat_response('{"answer":3}')
-        assert "previous response" in body["messages"][1]["content"]
+        assert "other model returned output" in body["messages"][1]["content"]
         return compatible_chat_response('{"answer":"valid"}')
 
     async def exercise() -> StructuredResult:
         async with LLMClient(
-            make_settings(
-                llm_fallback_base_url=None,
-                llm_fallback_api_key=None,
-                llm_fallback_model=None,
-            ),
+            make_settings(),
             transport=httpx.MockTransport(handle),
         ) as client:
-            return await client.generate("Extract an answer.", StructuredResult)
+            return await client.generate("Extract an answer.", StructuredResult, step="test")
 
     result = run(exercise())
     assert result.answer == "valid"
     assert calls == 2
 
 
-def test_retry_after_is_respected_and_provider_calls_are_spaced() -> None:
+def test_fallback_rate_limit_retries_once_with_short_backoff() -> None:
     calls = 0
     delays: list[float] = []
 
-    def handle(_: httpx.Request) -> httpx.Response:
+    def handle(request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        if calls == 1:
-            return httpx.Response(429, headers={"Retry-After": "3"})
+        if request.url.host == "primary.test":
+            return httpx.Response(429, headers={"Retry-After": "60"})
+        if calls == 2:
+            return httpx.Response(429, headers={"Retry-After": "60"})
         return compatible_chat_response('{"answer":"retried"}')
 
     async def sleep(delay: float) -> None:
@@ -128,21 +125,16 @@ def test_retry_after_is_respected_and_provider_calls_are_spaced() -> None:
 
     async def exercise() -> StructuredResult:
         async with LLMClient(
-            make_settings(
-                llm_max_retries=1,
-                llm_fallback_base_url=None,
-                llm_fallback_api_key=None,
-                llm_fallback_model=None,
-            ),
+            make_settings(llm_max_retries=1),
             transport=httpx.MockTransport(handle),
             sleep=sleep,
         ) as client:
-            return await client.generate("Return a result.", StructuredResult)
+            return await client.generate("Return a result.", StructuredResult, step="test")
 
     result = run(exercise())
     assert result.answer == "retried"
-    assert calls == 2
-    assert delays == [3.0]
+    assert calls == 3
+    assert delays[0] == 0.5
 
 
 def test_minimum_interval_is_enforced_between_provider_requests() -> None:
@@ -154,6 +146,8 @@ def test_minimum_interval_is_enforced_between_provider_requests() -> None:
         calls += 1
         if calls == 1:
             return httpx.Response(429, headers={"Retry-After": "0"})
+        if calls == 2:
+            return httpx.Response(429, headers={"Retry-After": "0"})
         return compatible_chat_response('{"answer":"spaced"}')
 
     async def sleep(delay: float) -> None:
@@ -164,22 +158,19 @@ def test_minimum_interval_is_enforced_between_provider_requests() -> None:
             make_settings(
                 llm_max_retries=1,
                 llm_min_request_interval_seconds=2,
-                llm_fallback_base_url=None,
-                llm_fallback_api_key=None,
-                llm_fallback_model=None,
             ),
             transport=httpx.MockTransport(handle),
             sleep=sleep,
         ) as client:
-            return await client.generate("Return a result.", StructuredResult)
+            return await client.generate("Return a result.", StructuredResult, step="test")
 
     result = run(exercise())
     assert result.answer == "spaced"
-    assert calls == 2
+    assert calls == 3
     assert max(delays) >= 1.9
 
 
-def test_long_retry_after_falls_back_instead_of_retrying_too_early() -> None:
+def test_primary_rate_limit_fails_over_without_waiting_for_retry_after() -> None:
     calls: list[str] = []
 
     def handle(request: httpx.Request) -> httpx.Response:
@@ -194,15 +185,18 @@ def test_long_retry_after_falls_back_instead_of_retrying_too_early() -> None:
             transport=httpx.MockTransport(handle),
             sleep=no_sleep,
         ) as client:
-            return await client.generate("Return a result.", StructuredResult)
+            return await client.generate("Return a result.", StructuredResult, step="test")
 
     result = run(exercise())
     assert result.answer == "fallback"
     assert calls == ["primary.test", "fallback.test"]
 
 
-def test_invalid_output_after_retry_falls_back_and_reports_if_both_fail() -> None:
+def test_invalid_fallback_output_is_rejected() -> None:
+    calls: list[str] = []
+
     def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.host)
         return compatible_chat_response('{"wrong":"shape"}')
 
     async def exercise() -> None:
@@ -211,11 +205,57 @@ def test_invalid_output_after_retry_falls_back_and_reports_if_both_fail() -> Non
             transport=httpx.MockTransport(handle),
         ) as client:
             with pytest.raises(LLMError) as caught:
-                await client.generate("Return data.", StructuredResult)
-        assert caught.value.code == "llm_providers_exhausted"
-        assert caught.value.status_code == 503
+                await client.generate("Return data.", StructuredResult, step="test")
+        assert caught.value.code == "llm_invalid_output"
+        assert caught.value.status_code == 502
 
     run(exercise())
+    assert calls == ["primary.test", "fallback.test", "primary.test"]
+
+
+def test_both_models_rate_limited_returns_saved_result_message() -> None:
+    calls: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.host)
+        return httpx.Response(429)
+
+    async def exercise() -> None:
+        async with LLMClient(
+            make_settings(),
+            transport=httpx.MockTransport(handle),
+            sleep=no_sleep,
+        ) as client:
+            with pytest.raises(LLMError) as caught:
+                await client.generate("Return data.", StructuredResult, step="test")
+        assert caught.value.code == "llm_rate_limited"
+        assert (
+            caught.value.public_message
+            == "The AI service is busy, try again in a minute or view the saved result"
+        )
+
+    run(exercise())
+    assert calls == ["primary.test", "fallback.test", "fallback.test"]
+
+
+def test_primary_timeout_fails_over_to_fallback() -> None:
+    calls: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.host)
+        if request.url.host == "primary.test":
+            raise httpx.ReadTimeout("fixture timeout", request=request)
+        return compatible_chat_response('{"answer":"fallback"}')
+
+    async def exercise() -> StructuredResult:
+        async with LLMClient(
+            make_settings(),
+            transport=httpx.MockTransport(handle),
+        ) as client:
+            return await client.generate("Return data.", StructuredResult, step="test")
+
+    assert run(exercise()).answer == "fallback"
+    assert calls == ["primary.test", "fallback.test"]
 
 
 def test_no_provider_configured_returns_explicit_error() -> None:
@@ -231,7 +271,14 @@ def test_no_provider_configured_returns_explicit_error() -> None:
             )
         ) as client:
             with pytest.raises(LLMError) as caught:
-                await client.generate("Return data.", StructuredResult)
+                await client.generate("Return data.", StructuredResult, step="test")
         assert caught.value.code == "llm_not_configured"
 
     run(exercise())
+
+
+def test_fallback_model_must_be_distinct_from_primary() -> None:
+    with pytest.raises(LLMError) as caught:
+        LLMClient(make_settings(llm_fallback_model="fixture-primary-model"))
+
+    assert caught.value.code == "llm_invalid_configuration"

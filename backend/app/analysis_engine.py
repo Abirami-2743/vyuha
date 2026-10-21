@@ -199,7 +199,11 @@ class AnalysisEngine:
         text_note: str | None = None
         try:
             prompt = _critic_prompt(findings)
-            text_response = await self._llm.generate(prompt, _CriticTextResponse)
+            text_response = await self._llm.generate(
+                prompt,
+                _CriticTextResponse,
+                step="critic",
+            )
             _validate_critic_text(findings, text_response)
             text_status = "llm"
         except LLMError as exc:

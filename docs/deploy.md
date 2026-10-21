@@ -9,8 +9,12 @@ This guide deploys the frontend to Vercel and the API to Render's free web-servi
 3. Review the Blueprint. It uses the repository root, installs `backend/requirements.txt`, pins Python `3.12.11`, starts `backend.app.main:app` on Render's `$PORT`, enables proxy-header handling, and checks `/health`.
 4. In the service's **Environment** settings, set the secret environment variables:
    - `QLOO_API_KEY`: your Qloo hackathon API key.
-   - `LLM_API_KEY`: your Groq API key.
-   - `LLM_FALLBACK_API_KEY`: your Mistral API key.
+   - `LLM_API_KEY`: your Groq API key for the primary model.
+   - `LLM_FALLBACK_API_KEY`: your Groq API key for the second model.
+   - `LLM_MODEL`: the primary Groq model ID supported by your account.
+   - `LLM_FALLBACK_MODEL`: a different supported Groq model ID.
+   - `LLM_BASE_URL` and `LLM_FALLBACK_BASE_URL`: `https://api.groq.com/openai/v1`.
+   - `CORS_ORIGINS`: exact Vercel production origin(s), comma-separated.
    The Blueprint marks these as unsynchronized so values must be entered privately in Render. Never put them in GitHub, Vercel, or browser-visible variables.
 5. Save and deploy. The first free-tier start may take time. When the deploy is live, open `https://<render-service>.onrender.com/health`; expect HTTP 200 and `{"status":"ok","service":"vyuha"}`.
 
@@ -23,12 +27,10 @@ This guide deploys the frontend to Vercel and the API to Render's free web-servi
 
 ## 3. Capture demo runs locally
 
-From the repository root, configure `.env` with `QLOO_API_KEY` and at least one complete
-OpenAI-compatible API client configuration. The provider setup is Groq (primary)
-(`https://api.groq.com/openai/v1`, model `llama-3.3-70b-versatile`) with Mistral fallback
-(`https://api.mistral.ai/v1`, model `mistral-small-latest`). Keep both API keys private in `.env`.
-The `llama-3.3-70b-versatile` value is the configured Groq model identifier; it does not mean
-Llama is a separate provider in this setup.
+From the repository root, configure `.env` with `QLOO_API_KEY` and both Groq model
+configurations. Use `https://api.groq.com/openai/v1` for `LLM_BASE_URL` and
+`LLM_FALLBACK_BASE_URL`, and supply distinct, supported model IDs through `LLM_MODEL` and
+`LLM_FALLBACK_MODEL`. Keep both API keys private in `.env`.
 
 Run the actual pipeline for all five input-only briefs:
 
@@ -62,7 +64,7 @@ The report contains counts and limitations only, not captured Qloo outputs.
    the matching private output from `.vyuha-private/demo-runs/`. Render mounts these at
    `/etc/secrets/<filename>` for non-Docker services
    ([Render documentation](https://render.com/docs/configure-environment-variables#secret-files)).
-   `VYUHA_SAVED_RUNS_DIR=/etc/secrets` is set in the Blueprint. A card's **View saved run** button
+   `VYUHA_SAVED_RUNS_DIR=/etc/secrets` is set in the Blueprint. A card's **View saved result, not live** button
    appears only when its corresponding file is available.
 4. The legacy `GET /saved-run` endpoint can still read a single file at
    `VYUHA_SAVED_RUN_PATH=/etc/secrets/saved-run.json`; upload that optional file separately only
@@ -78,7 +80,7 @@ The report contains counts and limitations only, not captured Qloo outputs.
 1. Check the Render `/health` URL again after the CORS update.
 2. Open the Vercel URL in a private/incognito window and on a phone using cellular data (not the same Wi-Fi as your development machine). This checks that the app uses hosted services rather than local files or local network access.
 3. Confirm the backend status becomes connected, run a gallery brief or type your own, resolve any identity choices, and verify that the result shows evidence and limitations returned by the live services.
-4. Confirm each **View saved run** action appears only when its per-demo file exists. Open one and verify the banner says **Saved run from `<date>`, not live**. It must not be mistaken for a live analysis.
+4. Confirm each **View saved result, not live** action appears only when its per-demo file exists. Open one and verify it says **Saved result, not live** with its capture date. It must not be mistaken for a live analysis.
 5. To verify the rate-limit fallback, make requests until a configured limit is reached. The response should explain the limit and direct the user to a saved run when one is configured. Defaults are 100 requests per client IP per UTC day and 1,000 per process per UTC day; set `ANALYSIS_PER_IP_DAILY_LIMIT` and `ANALYSIS_DAILY_LIMIT` in Render to change them. These in-memory counters reset when the instance restarts and are not shared across multiple instances.
 
 ## Environment variables
@@ -96,16 +98,15 @@ The Render Blueprint declares the runtime variables and defaults. Secrets are ma
 | `QLOO_RETRY_BACKOFF_SECONDS` | No | Qloo retry delay; `0.5` |
 | `LLM_BASE_URL` | No | Groq (primary) endpoint using the OpenAI-compatible API format; `https://api.groq.com/openai/v1` |
 | `LLM_API_KEY` | **Yes** | Groq primary LLM credential |
-| `LLM_MODEL` | No | `llama-3.3-70b-versatile` |
-| `LLM_FALLBACK_BASE_URL` | No | Mistral (fallback) endpoint; `https://api.mistral.ai/v1` |
-| `LLM_FALLBACK_API_KEY` | **Yes** | Mistral fallback LLM credential |
-| `LLM_FALLBACK_MODEL` | No | `mistral-small-latest` |
+| `LLM_MODEL` | No | Required primary Groq model ID; set in Render Environment |
+| `LLM_FALLBACK_BASE_URL` | No | Groq second-model endpoint; `https://api.groq.com/openai/v1` |
+| `LLM_FALLBACK_API_KEY` | **Yes** | Groq credential for the fallback model |
+| `LLM_FALLBACK_MODEL` | No | Required second Groq model ID; set in Render Environment |
 | `LLM_TIMEOUT_SECONDS` | No | LLM timeout; `45` |
-| `LLM_MAX_RETRIES` | No | LLM retry bound; `1` |
-| `LLM_RETRY_BACKOFF_SECONDS` | No | LLM retry delay; `0.5` |
+| `LLM_MAX_RETRIES` | No | Retry bound for transient non-429 provider errors; `1` |
+| `LLM_RETRY_BACKOFF_SECONDS` | No | Transient-error delay and maximum short fallback 429 delay; `0.5` |
 | `LLM_MIN_REQUEST_INTERVAL_SECONDS` | No | Minimum spacing between LLM requests; `1` |
-| `LLM_INVALID_OUTPUT_RETRIES` | No | Retry bound for invalid LLM output; `1` |
-| `LLM_HTTP_REFERER` | No | Optional client attribution; set to the deployed Vercel origin if desired |
+| `LLM_HTTP_REFERER` | No | Optional client attribution header |
 | `LLM_APP_TITLE` | No | App title; `Vyuha` |
 | `CORS_ORIGINS` | No | Comma-separated exact origins; start with localhost and add the deployed Vercel origin |
 | `MAX_REQUEST_BYTES` | No | Maximum request body; `1048576` |
@@ -128,6 +129,7 @@ The Render Blueprint declares the runtime variables and defaults. Secrets are ma
   `VYUHA_SAVED_RUN_PATH=/etc/secrets/saved-run.json`.
 - **Saved run returns an unavailable error:** verify the secret file is valid Vyuha saved-run JSON with `captured_at` and a schema-valid `analysis`. The API rejects malformed or oversized files rather than presenting broken data.
 - **Cold start appears slow:** Render's free service may sleep while idle. Wait for the request; Vyuha only labels the server as waking after five seconds without progress and can show the separately dated saved run if live analysis fails.
+- **Groq returns 429 during analysis:** the primary request immediately switches to the second configured Groq model. If that model also returns 429, Vyuha retries it once after a short delay and shows the busy message; when a saved run exists, Vyuha offers it as a clearly dated, non-live result.
 - **429 response during judging:** the message includes a UTC reset interval and points to the saved run if available. Adjust the two analysis limit variables in Render before the judging session; an instance restart resets the in-memory counters.
 - **LLM or Qloo service returns a rate limit/configuration error:** confirm the three secret values are set in Render and that the configured model/endpoints remain available. Vyuha reports integration failures and does not replace them with fabricated live evidence.
 

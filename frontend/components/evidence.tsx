@@ -59,6 +59,6 @@ function readableSourceReference(reference: string): string {
   try {
     return `${new URL(reference).hostname.replace(/^www\./, "")} source`;
   } catch {
-    return "Source record";
+    return "Reference unavailable";
   }
 }

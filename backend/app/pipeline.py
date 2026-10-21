@@ -274,7 +274,6 @@ class DiscoveryPipeline:
                 TraceStep(
                     name="Plan",
                     duration_ms=round(plan_duration, 3),
-                    result_count=7,
                 ),
                 external_step("Qloo search", "qloo_search"),
                 external_step("Qloo insights", "qloo_insights"),
@@ -1377,7 +1376,11 @@ class DiscoveryPipeline:
                 ensure_ascii=True,
             )
         )
-        return await self._llm.generate(prompt, _InterpretationResponse)
+        return await self._llm.generate(
+            prompt,
+            _InterpretationResponse,
+            step="candidate_interpretation",
+        )
 
     def _comparison(
         self,

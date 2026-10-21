@@ -1,4 +1,4 @@
-"""Structured-output client using Groq (primary) and Mistral (fallback)."""
+"""Structured-output client using Groq as the primary and fallback provider."""
 
 from __future__ import annotations
 
@@ -47,10 +47,10 @@ class LLMClient:
     ) -> None:
         self._settings = settings
         self._sleep = sleep
+        self._providers = self._configured_providers(settings)
         self._http = httpx.AsyncClient(transport=transport)
         self._request_lock = asyncio.Lock()
         self._last_request_at: float | None = None
-        self._providers = self._configured_providers(settings)
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -61,7 +61,13 @@ class LLMClient:
     async def __aexit__(self, *_: object) -> None:
         await self.aclose()
 
-    async def generate(self, prompt: str, output_model: type[OutputModel]) -> OutputModel:
+    async def generate(
+        self,
+        prompt: str,
+        output_model: type[OutputModel],
+        *,
+        step: str,
+    ) -> OutputModel:
         if not prompt.strip() or len(prompt) > 20_000:
             raise LLMError(
                 "llm_invalid_input",
@@ -76,35 +82,78 @@ class LLMClient:
             )
 
         last_failure: LLMError | None = None
+        invalid_output = False
         for provider_index, provider in enumerate(self._providers):
             if provider_index:
                 logger.warning(
                     "llm_provider_fallback",
-                    extra={"event": "llm_provider_fallback", "provider": provider.name},
+                    extra={
+                        "event": "llm_provider_fallback",
+                        "step": step,
+                        "provider": "groq",
+                        "provider_role": provider.name,
+                        "model": provider.model,
+                    },
                 )
-            for invalid_attempt in range(self._settings.llm_invalid_output_retries + 1):
-                retry_instruction = (
-                    "\nYour previous response did not match the required JSON schema. "
-                    "Return only a valid JSON object matching the schema."
-                    if invalid_attempt
-                    else ""
+            retry_instruction = (
+                "\nThe other model returned output that did not match the required JSON "
+                "schema. Return only a valid JSON object matching the schema."
+                if invalid_output
+                else ""
+            )
+            try:
+                return await self._generate_from_provider(
+                    provider,
+                    prompt + retry_instruction,
+                    output_model,
+                    step=step,
                 )
-                try:
-                    return await self._generate_from_provider(
-                        provider,
-                        prompt + retry_instruction,
-                        output_model,
+            except _InvalidStructuredOutput:
+                invalid_output = True
+                last_failure = None
+                if provider.name == "fallback" and provider_index > 0:
+                    primary = self._providers[0]
+                    logger.warning(
+                        "llm_invalid_output_retry",
+                        extra={
+                            "event": "llm_invalid_output_retry",
+                            "step": step,
+                            "provider": "groq",
+                            "provider_role": primary.name,
+                            "model": primary.model,
+                        },
                     )
-                except _InvalidStructuredOutput:
-                    last_failure = LLMError(
-                        "llm_invalid_output",
-                        "The configured LLM providers did not return valid structured output.",
-                        status_code=502,
-                    )
-                except LLMError as exc:
-                    last_failure = exc
+                    try:
+                        return await self._generate_from_provider(
+                            primary,
+                            prompt
+                            + "\nThe other model returned output that did not match the "
+                            "required JSON schema. Return only a valid JSON object matching "
+                            "the schema.",
+                            output_model,
+                            step=step,
+                        )
+                    except _InvalidStructuredOutput:
+                        last_failure = None
+                    except LLMError as exc:
+                        last_failure = exc
                     break
+            except LLMError as exc:
+                last_failure = exc
 
+        if last_failure is not None and last_failure.code == "llm_rate_limited":
+            raise LLMError(
+                "llm_rate_limited",
+                "The AI service is busy, try again in a minute or view the saved result",
+                status_code=503,
+                retryable=True,
+            ) from last_failure
+        if invalid_output and last_failure is None:
+            raise LLMError(
+                "llm_invalid_output",
+                "The AI response did not match the required format. Please try again.",
+                status_code=502,
+            )
         if last_failure is None:
             raise LLMError(
                 "llm_unavailable",
@@ -114,7 +163,8 @@ class LLMClient:
             )
         raise LLMError(
             "llm_providers_exhausted",
-            "No configured LLM provider returned a usable response.",
+            "The AI service could not complete this analysis. "
+            "Please try again or view the saved result.",
             status_code=503,
             retryable=last_failure.retryable,
         ) from last_failure
@@ -124,6 +174,8 @@ class LLMClient:
         provider: _Provider,
         prompt: str,
         output_model: type[OutputModel],
+        *,
+        step: str,
     ) -> OutputModel:
         schema = json.dumps(output_model.model_json_schema())
         body = {
@@ -149,13 +201,15 @@ class LLMClient:
             "Authorization": f"Bearer {provider.api_key}",
             "Content-Type": "application/json",
         }
-        if provider.name == "fallback":
-            if self._settings.llm_http_referer:
-                headers["HTTP-Referer"] = self._settings.llm_http_referer
-            if self._settings.llm_app_title:
-                headers["X-Title"] = self._settings.llm_app_title
+        if self._settings.llm_http_referer:
+            headers["HTTP-Referer"] = self._settings.llm_http_referer
+        if self._settings.llm_app_title:
+            headers["X-Title"] = self._settings.llm_app_title
 
-        for attempt in range(self._settings.llm_max_retries + 1):
+        max_attempts = (
+            2 if provider.name == "fallback" else self._settings.llm_max_retries + 1
+        )
+        for attempt in range(max_attempts):
             try:
                 response = await self._post_spaced(
                     f"{provider.base_url}/chat/completions",
@@ -164,18 +218,17 @@ class LLMClient:
                     timeout=self._settings.llm_timeout_seconds,
                 )
             except httpx.TimeoutException as exc:
-                if attempt < self._settings.llm_max_retries:
-                    logger.warning(
-                        "llm_retry",
-                        extra={
-                            "event": "llm_retry",
-                            "provider": provider.name,
-                            "reason": "timeout",
-                            "attempt": attempt + 1,
-                        },
-                    )
-                    await self._sleep(self._settings.llm_retry_backoff_seconds * (2**attempt))
-                    continue
+                logger.warning(
+                    "llm_provider_failed",
+                    extra={
+                        "event": "llm_provider_failed",
+                        "step": step,
+                        "provider": "groq",
+                        "provider_role": provider.name,
+                        "model": provider.model,
+                        "reason": "timeout",
+                    },
+                )
                 raise LLMError(
                     "llm_timeout",
                     "The LLM provider did not respond before the request timed out.",
@@ -188,7 +241,10 @@ class LLMClient:
                         "llm_retry",
                         extra={
                             "event": "llm_retry",
-                            "provider": provider.name,
+                            "step": step,
+                            "provider": "groq",
+                            "provider_role": provider.name,
+                            "model": provider.model,
                             "reason": "request_error",
                             "attempt": attempt + 1,
                         },
@@ -202,28 +258,58 @@ class LLMClient:
                     retryable=True,
                 ) from exc
 
+            if response.status_code == 429:
+                logger.warning(
+                    "llm_provider_rate_limited",
+                    extra={
+                        "event": "llm_provider_rate_limited",
+                        "step": step,
+                        "provider": "groq",
+                        "provider_role": provider.name,
+                        "model": provider.model,
+                    },
+                )
+                if provider.name == "fallback" and attempt == 0:
+                    delay = min(max(self._settings.llm_retry_backoff_seconds, 0.1), 1.0)
+                    logger.warning(
+                        "llm_retry",
+                        extra={
+                            "event": "llm_retry",
+                            "step": step,
+                            "provider": "groq",
+                            "provider_role": provider.name,
+                            "model": provider.model,
+                            "status_code": response.status_code,
+                            "attempt": 1,
+                        },
+                    )
+                    await self._sleep(delay)
+                    continue
+                raise LLMError(
+                    "llm_rate_limited",
+                    "The LLM provider is rate limiting requests.",
+                    status_code=503,
+                    retryable=True,
+                )
+
             if response.status_code in _TRANSIENT_STATUSES:
                 if attempt < self._settings.llm_max_retries:
-                    delay = self._retry_delay(response, attempt)
-                    if delay is not None:
+                    retry_delay = self._retry_delay(response, attempt)
+                    if retry_delay is not None:
                         logger.warning(
                             "llm_retry",
                             extra={
                                 "event": "llm_retry",
-                                "provider": provider.name,
+                                "step": step,
+                                "provider": "groq",
+                                "provider_role": provider.name,
+                                "model": provider.model,
                                 "status_code": response.status_code,
                                 "attempt": attempt + 1,
                             },
                         )
-                        await self._sleep(delay)
+                        await self._sleep(retry_delay)
                         continue
-                if response.status_code == 429:
-                    raise LLMError(
-                        "llm_rate_limited",
-                        "The LLM provider is rate limiting requests.",
-                        status_code=503,
-                        retryable=True,
-                    )
                 if response.status_code in _TRANSIENT_STATUSES:
                     raise LLMError(
                         "llm_provider_unavailable",
@@ -271,7 +357,10 @@ class LLMClient:
                 "llm_response_validated",
                 extra={
                     "event": "llm_response_validated",
-                    "provider": provider.name,
+                    "step": step,
+                    "provider": "groq",
+                    "provider_role": provider.name,
+                    "model": provider.model,
                     "status_code": response.status_code,
                 },
             )
@@ -281,6 +370,16 @@ class LLMClient:
 
     def _configured_providers(self, settings: Settings) -> list[_Provider]:
         providers: list[_Provider] = []
+        if (
+            settings.llm_model is not None
+            and settings.llm_fallback_model is not None
+            and settings.llm_model.casefold() == settings.llm_fallback_model.casefold()
+        ):
+            raise LLMError(
+                "llm_invalid_configuration",
+                "The fallback must use a different Groq model ID from the primary.",
+                status_code=503,
+            )
         configurations = (
             ("primary", settings.llm_base_url, settings.llm_api_key, settings.llm_model),
             (

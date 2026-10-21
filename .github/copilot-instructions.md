@@ -27,7 +27,7 @@ Clean separation: frontend, backend API, Qloo client and integrations, agent orc
 - Backend: Python, FastAPI, LangGraph, Pydantic
 - Frontend: Next.js + TypeScript + Tailwind
 - Hosting: Vercel (frontend) + Render (backend), free tiers only
-- LLM: ONE swappable OpenAI-compatible API client via env vars LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, plus LLM_FALLBACK_BASE_URL, LLM_FALLBACK_API_KEY, LLM_FALLBACK_MODEL. Use Groq (primary) with Mistral (fallback). No other code imports a provider SDK. Handle rate limits with backoff and automatic fallback.
+- LLM: ONE swappable OpenAI-compatible API client via env vars LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, plus LLM_FALLBACK_BASE_URL, LLM_FALLBACK_API_KEY, LLM_FALLBACK_MODEL. Use Groq (primary model) with a second Groq model as fallback. No other code imports a provider SDK. Handle rate limits with backoff and automatic fallback.
 - Secrets only in .env (gitignored) with a .env.example of placeholders. Qloo env var: QLOO_API_KEY. Never put secrets in source, frontend config, docs, logs, or commits. Never print secret values in terminal output.
 
 ## Working rules

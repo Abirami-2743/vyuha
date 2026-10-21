@@ -53,7 +53,7 @@ Updated: October 21, 2026
 
 ## Demo gallery and private saved runs — October 18, 2026
 
-- Added five input-only demo briefs to the landing-page gallery, per-demo allowlisted saved-run reads, explicit identity selection, per-demo live-failure fallback, private capture and evaluation scripts, and Render secret-file instructions. Updated the example and Render LLM configuration to Groq primary and Mistral fallback.
+- Added five input-only demo briefs to the landing-page gallery, per-demo allowlisted saved-run reads, explicit identity selection, per-demo live-failure fallback, private capture and evaluation scripts, and Render secret-file instructions. Updated the example and Render LLM configuration to use a Groq primary model and a second Groq model as fallback, with model IDs supplied through environment variables.
 - Captured five real runs from the local `.env` pipeline into the gitignored `.vyuha-private/demo-runs/`; each file validates against the API schema and includes its capture timestamp and deterministic identity-selection metadata. Captured outputs are not tracked.
 - Evaluation counts from those five snapshots: 5 runs, 2 abstentions, 15 candidate downgrades, and 0 evidence claims without a source reference. These are counts only, not significance or performance claims; limitations are in `docs/evaluation.md`.
 - Browser verified all five live buttons (including explicit identity pickers for Blue Bottle, The Ordinary, and Starbucks; the invented business returned the live empty state), all five saved-run views and their “not live” banners, a missing-file 404/hidden button, and 375px layout without horizontal overflow.
@@ -72,7 +72,7 @@ Updated: October 21, 2026
 ## Judge-first redesign and LLM copy correction — October 21, 2026
 
 - Confirmed the official 2026 Devpost criteria in the browser: Technological Implementation, Design, Potential Impact, and Quality of the Idea (equally weighted).
-- Updated provider descriptions to Groq (primary) with Mistral (fallback) in the developer instructions, environment example, architecture, deployment guide, and progress record. Kept provider/model configuration values unchanged.
+- Updated provider descriptions to Groq (primary model) with a second Groq model as fallback in the developer instructions, environment example, architecture, deployment guide, and progress record. Model IDs are environment-supplied.
 - Added route-backed Home, demo gallery, verdict, partner list/details, evidence, and About views. Reused the existing five input-only briefs, live analysis stream, and saved-run contracts; added browser-history handling, explicit Back/Home navigation, cancel-on-back, and plain-language progress steps.
 - Reworded the home pitch to describe Qloo taste signals without asserting shared customers; verdict reasons now require a supported/partial criterion with evidence. Direct-link empty states route back to demos, and the evidence timeline is collapsed until requested.
 - Verified the five private saved demo runs are available through the local API and marked non-live in the gallery/result flow. Confirmed that a live request can still fall back to the saved result when the backend is unavailable; no live analysis was triggered during this verification.
@@ -87,6 +87,36 @@ Updated: October 21, 2026
 - Final frontend checks, run in the requested order: `npm run lint` passed; `npm run typecheck` passed; `npm run test` passed (4 files, 22 tests); `npm run build` passed (optimized Next.js build).
 - Final backend checks: `python -m pytest tests -q` passed (64 tests); `python -m ruff check backend tests --config backend\pyproject.toml` passed; `python -m mypy --config-file backend\pyproject.toml backend\app` passed (14 source files).
 - Browser checked Home, Demos, Analyze, Verdict, Partners, Partner Detail, Evidence, and About at a 375px viewport. Every page showed Back and Home, Back navigated to its expected destination, browser Back from Partner Detail returned to the Verdict without a detail-page loop, and each page had equal document client/scroll widths (no horizontal overflow). The Home hero states the product plainly; a saved, non-live result clearly named the recommended partner and showed its reason, risk, first test, Qloo caveat, and real run counts.
-- Repository provider-text search found no incorrect provider names in source. Remaining Google mentions describe a hackathon form and a historical web search; OpenAI mentions describe the compatible API format, not the provider; `llama-3.3-70b-versatile` is the existing Groq model identifier and was not changed. Provider descriptions consistently identify Groq as primary and Mistral as fallback.
+- The provider-text search at that time found no incorrect provider names in source. Google mentions described a hackathon form and historical web search; OpenAI mentions described the compatible API format, not a model provider. Model identifiers are configuration, not source-code constants.
 - `.next/`, `*.tsbuildinfo`, and the generated `frontend/AGENTS.md` are ignored by Git; the tracked `frontend/next-env.d.ts` matches its original contents. Generated files do not appear in `git status`.
 - No fresh live LLM/Qloo analysis was run. Browser result checks used the existing private saved run and displayed the non-live label. No commit or deployment was made.
+
+## Honesty audit and Groq fallback — October 21, 2026
+
+### Done
+
+- Replaced the prior fallback-provider references with Groq (primary model) and a distinct second Groq model as fallback. Kept all primary/fallback environment-variable names; Render now requires model IDs as environment values instead of pinning them in the Blueprint.
+- Primary 429s and timeouts now switch immediately to the fallback. A fallback 429 retries once after a short bounded delay; if rate-limited again, the API reports the specified busy message. Structured responses from either model are validated before use; invalid fallback output gets one attempt on the other model and is never returned.
+- Added step/provider/model logging without credentials, the `GET /` service status response, and tests for rate-limit fallback, timeout fallback, exhausted rate limits, invalid fallback output, and the distinct fallback model requirement.
+- Kept the two existing batched logical LLM steps: one optional interpretation call across Qloo-backed candidates, plus one critic call. Deterministic decision, experiment, and outreach steps make no LLM calls; no quality-reducing call reduction was available.
+- Removed the unmeasured Plan trace count and static About-page evaluation metrics; clarified user-facing recommendation limits and evidence labels. Saved results now consistently say “Saved result, not live” with a capture timestamp, including the live-failure explanation.
+- Restricted the LLM probe script to HTTPS.
+
+### Verified
+
+- `python -m pytest tests -q`: 67 passed.
+- `python -m ruff check backend tests --config backend\pyproject.toml`: all checks passed.
+- `python -m mypy --config-file backend\pyproject.toml backend\app`: success for 14 source files.
+- Frontend `npm run lint`, `npm run typecheck`, and `npm run test`: passed; Vitest reports 4 files and 23 tests passed.
+- Frontend `npm run build`: optimized Next.js production build completed successfully.
+- Tracked-source provider-name scan: no matches. Credential-pattern scan found no matching literals.
+- `git diff --check`: passed. No commit or deployment was made.
+
+### Blocked / unverified
+
+- No live Groq or Qloo request or hosted Vercel/Render verification was run. Live behavior remains unverified until Render has valid credentials and distinct supported Groq model IDs.
+- The configured model values are deliberately not guessed or embedded; set `LLM_MODEL` and `LLM_FALLBACK_MODEL` in Render to supported, different Groq model IDs.
+
+### Next
+
+- Configure the existing server-side environment variables and, when authorized, verify `GET /`, `/health`, a live analysis, and the saved-result fallback on the hosted deployment.
