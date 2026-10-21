@@ -11,6 +11,10 @@ from pydantic import SecretStr
 from backend.app.errors import QlooError
 from backend.app.qloo import QlooClient
 from backend.app.settings import Settings
+from backend.app.trace_metadata import (
+    start_external_call_collection,
+    stop_external_call_collection,
+)
 from tests.fixtures.qloo_responses import INSIGHTS_RESPONSE, SEARCH_RESPONSE
 
 TEST_API_KEY = "fixture-only-qloo-key"
@@ -55,18 +59,25 @@ def test_search_constructs_documented_request_and_parses_live_shape() -> None:
         assert request.headers["X-Api-Key"] == TEST_API_KEY
 
     async def exercise() -> None:
+        calls, trace_token = start_external_call_collection()
         async with QlooClient(
             make_settings(),
             transport=json_handler(SEARCH_RESPONSE, before_respond=inspect_request),
         ) as client:
-            entities = await client.search_entities(
-                " Fixture Brand ", "urn:entity:brand"
-            )
+            try:
+                entities = await client.search_entities(" Fixture Brand ", "urn:entity:brand")
+            finally:
+                stop_external_call_collection(trace_token)
         assert len(entities) == 1
         assert entities[0].entity_id == "test-brand-id"
         assert entities[0].name == "Fixture Brand"
         assert entities[0].entity_type == "urn:entity:brand"
         assert entities[0].entity_types == ["urn:entity:brand"]
+        assert len(calls) == 1
+        assert calls[0].operation == "qloo_search"
+        assert calls[0].status_code == 200
+        assert calls[0].result_count == 1
+        assert calls[0].duration_ms >= 0
 
     run(exercise())
 

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 import backend.app.main as main_module
-from backend.app.analysis_models import AnalysisStreamEvent
+from backend.app.analysis_models import AnalysisStreamEvent, TraceStep
 from backend.app.logging_config import JsonFormatter
 from backend.app.main import DailyAnalysisLimiter, create_app
 from backend.app.settings import Settings
@@ -314,6 +314,18 @@ def test_analyze_endpoint_streams_stage_progress(
                     stage=stage,  # type: ignore[arg-type]
                     status=status,  # type: ignore[arg-type]
                     message="Fixture progress event.",
+                    trace=(
+                        [
+                            TraceStep(
+                                name="Qloo search",
+                                duration_ms=1.2,
+                                result_count=2,
+                                http_statuses=[200],
+                            )
+                        ]
+                        if stage == "analysis"
+                        else None
+                    ),
                 )
 
     monkeypatch.setattr(main_module, "DiscoveryPipeline", PipelineFixture)
@@ -333,3 +345,7 @@ def test_analyze_endpoint_streams_stage_progress(
     assert response.headers["content-type"].startswith("text/event-stream")
     assert '"stage":"critic","status":"degraded"' in response.text
     assert '"stage":"analysis","status":"complete"' in response.text
+    assert (
+        '"name":"Qloo search","duration_ms":1.2,"result_count":2,"http_statuses":[200]'
+        in response.text
+    )

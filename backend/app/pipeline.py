@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
+from time import perf_counter
 from typing import Literal, TypedDict
 
 from langgraph.graph import END, StateGraph
 
 from .analysis_engine import AnalysisEngine
-from .analysis_models import AnalysisResult, AnalysisStage, AnalysisStreamEvent
+from .analysis_models import AnalysisResult, AnalysisStage, AnalysisStreamEvent, TraceStep
 from .discovery_models import (
     BusinessIdentity,
     CandidateCheck,
@@ -28,6 +29,10 @@ from .errors import LLMError, QlooError, VerificationError
 from .llm import LLMClient
 from .models import BusinessBrief, Candidate, EvidenceItem, ResolvedEntity, SeedAffinity
 from .qloo import QlooClient
+from .trace_metadata import (
+    start_external_call_collection,
+    stop_external_call_collection,
+)
 from .verification import NominatimClient, OSMPlace, normalize_text
 
 logger = logging.getLogger("vyuha.discovery")
@@ -155,83 +160,165 @@ class DiscoveryPipeline:
         self,
         request: DiscoveryRequest,
     ) -> AsyncIterator[AnalysisStreamEvent]:
+        plan_started = perf_counter()
         stage_names: dict[str, AnalysisStage] = {
             "stage_a": "discovery_identity",
             "stage_b": "discovery_candidates",
             "stage_c": "discovery_verification",
             "stage_d": "discovery_comparison",
         }
+        plan_duration = (perf_counter() - plan_started) * 1000
+        external_calls, trace_token = start_external_call_collection()
         state: _State = {"request": request}
-        yield AnalysisStreamEvent(
-            stage="discovery_identity",
-            status="running",
-            message="Resolving the business location and Qloo seed.",
-        )
-        async for update in self._graph.astream({"request": request}, stream_mode="updates"):
-            for node_name, values in update.items():
-                state.update(values)
-                stage = stage_names[node_name]
+        discovery_stage_started: dict[AnalysisStage, float] = {}
+        completed_durations: dict[AnalysisStage, float] = {}
+        analysis_stage_started: dict[AnalysisStage, float] = {}
+        analysis_durations: dict[AnalysisStage, float] = {}
+        try:
+            discovery_stage_started["discovery_identity"] = perf_counter()
+            yield AnalysisStreamEvent(
+                stage="discovery_identity",
+                status="running",
+                message="Resolving the business location and Qloo seed.",
+            )
+            async for update in self._graph.astream(
+                {"request": request},
+                stream_mode="updates",
+            ):
+                for node_name, values in update.items():
+                    state.update(values)
+                    stage = stage_names[node_name]
+                    started = discovery_stage_started.get(stage)
+                    if started is not None:
+                        completed_durations[stage] = (perf_counter() - started) * 1000
+                    yield AnalysisStreamEvent(
+                        stage=stage,
+                        status="complete",
+                        message=f"{stage.replace('_', ' ').capitalize()} completed.",
+                    )
+                    next_stage: tuple[AnalysisStage, str] | None = {
+                        "stage_a": (
+                            "discovery_candidates",
+                            "Querying Qloo for location-filtered candidates.",
+                        )
+                        if "seed_entities" in state
+                        else None,
+                        "stage_b": (
+                            "discovery_verification",
+                            "Checking candidate names and locations with OSM.",
+                        ),
+                        "stage_c": (
+                            "discovery_comparison",
+                            "Building the evidence-bounded comparison.",
+                        ),
+                        "stage_d": None,
+                    }[node_name]
+                    if next_stage is not None:
+                        discovery_stage_started[next_stage[0]] = perf_counter()
+                        yield AnalysisStreamEvent(
+                            stage=next_stage[0],
+                            status="running",
+                            message=next_stage[1],
+                        )
+            discovery = state.get("result")
+            if not isinstance(discovery, DiscoveryResult):
+                raise RuntimeError("Discovery graph completed without a validated result.")
+            final_result: AnalysisResult | None = None
+            async for stage, status, result in self._analysis.stream(discovery, request.brief):
+                messages: dict[str, str] = {
+                    "critic": "Building evidence-cited criticisms.",
+                    "decision": "Applying deterministic provisional and final decision rules.",
+                    "experiment": "Preparing a bounded test plan where the rating permits one.",
+                    "outreach": "Drafting outreach from disclosed facts and uncertainties.",
+                }
+                if status == "running":
+                    analysis_stage_started[stage] = perf_counter()
+                elif stage in analysis_stage_started:
+                    analysis_durations[stage] = (
+                        perf_counter() - analysis_stage_started[stage]
+                    ) * 1000
                 yield AnalysisStreamEvent(
                     stage=stage,
-                    status="complete",
-                    message=f"{stage.replace('_', ' ').capitalize()} completed.",
+                    status=status,
+                    message=(
+                        "LLM critic text was unavailable or rejected; "
+                        "rule-based criticisms were used."
+                        if stage == "critic" and status == "degraded"
+                        else messages[stage]
+                        if status == "running"
+                        else f"{stage.capitalize()} completed."
+                    ),
+                    result=None,
                 )
-                next_stage: tuple[AnalysisStage, str] | None = {
-                    "stage_a": (
-                        "discovery_candidates",
-                        "Querying Qloo for location-filtered candidates.",
-                    )
-                    if "seed_entities" in state
-                    else None,
-                    "stage_b": (
-                        "discovery_verification",
-                        "Checking candidate names and locations with OSM.",
-                    ),
-                    "stage_c": (
-                        "discovery_comparison",
-                        "Building the evidence-bounded comparison.",
-                    ),
-                    "stage_d": None,
-                }[node_name]
-                if next_stage is not None:
-                    yield AnalysisStreamEvent(
-                        stage=next_stage[0],
-                        status="running",
-                        message=next_stage[1],
-                    )
-        discovery = state.get("result")
-        if not isinstance(discovery, DiscoveryResult):
-            raise RuntimeError("Discovery graph completed without a validated result.")
-        final_result: AnalysisResult | None = None
-        async for stage, status, result in self._analysis.stream(discovery, request.brief):
-            messages: dict[str, str] = {
-                "critic": "Building evidence-cited criticisms.",
-                "decision": "Applying deterministic provisional and final decision rules.",
-                "experiment": "Preparing a bounded test plan where the rating permits one.",
-                "outreach": "Drafting outreach from disclosed facts and uncertainties.",
-            }
-            yield AnalysisStreamEvent(
-                stage=stage,
-                status=status,
-                message=(
-                    "LLM critic text was unavailable or rejected; rule-based criticisms were used."
-                    if stage == "critic" and status == "degraded"
-                    else messages[stage]
-                    if status == "running"
-                    else f"{stage.capitalize()} completed."
+                if result is not None:
+                    final_result = result
+            if final_result is None:
+                raise RuntimeError("Analysis graph completed without a final result.")
+
+            def external_step(name: str, operation: str) -> TraceStep:
+                calls = [item for item in external_calls if item.operation == operation]
+                counted_calls = [
+                    item.result_count for item in calls if item.result_count is not None
+                ]
+                duration = sum(item.duration_ms for item in calls) if calls else None
+                return TraceStep(
+                    name=name,
+                    duration_ms=round(duration, 3) if duration is not None else None,
+                    result_count=sum(counted_calls) if counted_calls else None,
+                    http_statuses=[
+                        item.status_code for item in calls if item.status_code is not None
+                    ],
+                )
+
+            trace = [
+                TraceStep(
+                    name="Plan",
+                    duration_ms=round(plan_duration, 3),
+                    result_count=7,
                 ),
-                result=None,
+                external_step("Qloo search", "qloo_search"),
+                external_step("Qloo insights", "qloo_insights"),
+                external_step("Map verification", "map_verification"),
+                TraceStep(
+                    name="Compare",
+                    duration_ms=(
+                        round(completed_durations["discovery_comparison"], 3)
+                        if "discovery_comparison" in completed_durations
+                        else None
+                    ),
+                    result_count=len(final_result.candidate_decisions),
+                ),
+                TraceStep(
+                    name="Critic",
+                    duration_ms=(
+                        round(analysis_durations["critic"], 3)
+                        if "critic" in analysis_durations
+                        else None
+                    ),
+                    result_count=sum(
+                        len(item.criticisms) for item in final_result.candidate_decisions
+                    )
+                    + len(final_result.global_criticisms),
+                ),
+                TraceStep(
+                    name="Decision",
+                    duration_ms=(
+                        round(analysis_durations["decision"], 3)
+                        if "decision" in analysis_durations
+                        else None
+                    ),
+                    result_count=len(final_result.candidate_decisions),
+                ),
+            ]
+            yield AnalysisStreamEvent(
+                stage="analysis",
+                status="complete",
+                message="Analysis completed.",
+                result=final_result,
+                trace=trace,
             )
-            if result is not None:
-                final_result = result
-        if final_result is None:
-            raise RuntimeError("Analysis graph completed without a final result.")
-        yield AnalysisStreamEvent(
-            stage="analysis",
-            status="complete",
-            message="Analysis completed.",
-            result=final_result,
-        )
+        finally:
+            stop_external_call_collection(trace_token)
 
     async def _stage_a(self, state: _State) -> dict[str, object]:
         request = state["request"]

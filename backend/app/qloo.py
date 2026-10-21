@@ -6,6 +6,7 @@ import asyncio
 import logging
 import math
 import re
+import time
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -18,6 +19,7 @@ from pydantic import ValidationError
 from .errors import QlooError
 from .models import Candidate, EvidenceItem, ResolvedEntity
 from .settings import Settings
+from .trace_metadata import record_external_call
 
 _ENTITY_TYPE_PATTERN = re.compile(r"^urn:(?:entity:[a-z0-9_]+|heatmap)$")
 _TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
@@ -64,6 +66,7 @@ class QlooClient:
         await self.aclose()
 
     async def search_entities(self, query: str, entity_type: str) -> list[ResolvedEntity]:
+        started_at = time.perf_counter()
         clean_query = query.strip()
         if not clean_query or len(clean_query) > 256:
             raise QlooError(
@@ -78,12 +81,27 @@ class QlooClient:
                 status_code=422,
             )
 
-        payload = await self._get_json(
-            "/search",
-            params={"query": clean_query, "types": entity_type},
-            not_found_is_empty=True,
-        )
+        try:
+            payload, status_code = await self._get_json(
+                "/search",
+                params={"query": clean_query, "types": entity_type},
+                not_found_is_empty=True,
+            )
+        except QlooError:
+            record_external_call(
+                "qloo_search",
+                (time.perf_counter() - started_at) * 1000,
+                None,
+                None,
+            )
+            raise
         if payload is None:
+            record_external_call(
+                "qloo_search",
+                (time.perf_counter() - started_at) * 1000,
+                status_code,
+                0,
+            )
             return []
         results = payload.get("results")
         if not isinstance(results, list):
@@ -122,6 +140,12 @@ class QlooClient:
                 )
             except ValidationError as exc:
                 raise self._malformed_response() from exc
+        record_external_call(
+            "qloo_search",
+            (time.perf_counter() - started_at) * 1000,
+            status_code,
+            len(entities),
+        )
         return entities
 
     async def get_cross_category_candidates(
@@ -132,6 +156,7 @@ class QlooClient:
         location: tuple[float, float],
         radius_miles: float = 100,
     ) -> list[Candidate]:
+        started_at = time.perf_counter()
         if not _ENTITY_TYPE_PATTERN.fullmatch(output_type):
             raise QlooError(
                 "qloo_invalid_input",
@@ -153,16 +178,25 @@ class QlooClient:
                 status_code=422,
             )
         wkt_point = f"POINT({longitude:.7f} {latitude:.7f})"
-        payload = await self._get_json(
-            "/v2/insights",
-            params={
-                "filter.type": output_type,
-                "signal.interests.entities": entity.entity_id,
-                "filter.location": wkt_point,
-                "filter.location.radius": str(radius_miles),
-                "take": "20",
-            },
-        )
+        try:
+            payload, status_code = await self._get_json(
+                "/v2/insights",
+                params={
+                    "filter.type": output_type,
+                    "signal.interests.entities": entity.entity_id,
+                    "filter.location": wkt_point,
+                    "filter.location.radius": str(radius_miles),
+                    "take": "20",
+                },
+            )
+        except QlooError:
+            record_external_call(
+                "qloo_insights",
+                (time.perf_counter() - started_at) * 1000,
+                None,
+                None,
+            )
+            raise
         if payload is None:
             raise self._malformed_response()
         results = payload.get("results")
@@ -254,6 +288,12 @@ class QlooClient:
                 )
             except ValidationError as exc:
                 raise self._malformed_response() from exc
+        record_external_call(
+            "qloo_insights",
+            (time.perf_counter() - started_at) * 1000,
+            status_code,
+            len(candidates),
+        )
         return candidates
 
     async def _get_json(
@@ -262,7 +302,7 @@ class QlooClient:
         *,
         params: dict[str, str],
         not_found_is_empty: bool = False,
-    ) -> dict[str, Any] | None:
+    ) -> tuple[dict[str, Any] | None, int]:
         for attempt in range(self._max_retries + 1):
             try:
                 response = await self._http.get(
@@ -309,7 +349,7 @@ class QlooClient:
                 ) from exc
 
             if response.status_code == 404 and not_found_is_empty:
-                return None
+                return None, response.status_code
             if response.status_code in _TRANSIENT_STATUSES:
                 if attempt < self._max_retries:
                     logger.warning(
@@ -380,7 +420,7 @@ class QlooClient:
                     "status_code": response.status_code,
                 },
             )
-            return payload
+            return payload, response.status_code
 
         raise AssertionError("bounded Qloo retry loop exited unexpectedly")
 

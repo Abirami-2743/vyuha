@@ -73,7 +73,11 @@ Nominatim requests are fixed to its official search host, user-triggered, limite
 `POST /analyze` runs discovery then streams server-sent JSON progress events for identity,
 candidate retrieval, verification, comparison, critic, decision, experiment, and outreach. Only
 completed nodes are marked complete. The analysis graph has separate critic, decision,
-experiment, and outreach nodes.
+experiment, and outreach nodes. The final event includes a compact trace with elapsed durations,
+result counts, and observed upstream HTTP statuses for Qloo Search/Insights and map verification;
+it contains no credentials or provider response bodies. These values are per-call/run metadata,
+not measures of recommendation quality. Qloo and map records do not currently provide a reliable
+chain-affiliation signal, so the interface labels chain status unknown rather than inferring it.
 
 The critic receives rule-generated evidence facts, not candidate names or retrieved free text. It
 can restate only allowlisted findings, with exact evidence references; invented references,

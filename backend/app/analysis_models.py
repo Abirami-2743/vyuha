@@ -52,6 +52,13 @@ class AnalysisResult(StrictModel):
     critic_text_note: str | None = Field(default=None, max_length=500)
 
 
+class TraceStep(StrictModel):
+    name: str = Field(min_length=1, max_length=100)
+    duration_ms: float | None = Field(default=None, ge=0)
+    result_count: int | None = Field(default=None, ge=0)
+    http_statuses: list[int] = Field(default_factory=list, max_length=20)
+
+
 class _CriticTextItem(StrictModel):
     finding_id: str = Field(min_length=1, max_length=400)
     issue: str = Field(min_length=1, max_length=1_000)
@@ -68,3 +75,4 @@ class AnalysisStreamEvent(StrictModel):
     status: ProgressStatus
     message: str = Field(min_length=1, max_length=500)
     result: AnalysisResult | None = None
+    trace: list[TraceStep] | None = None

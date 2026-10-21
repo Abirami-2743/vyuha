@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AnalysisView } from "@/components/analysis-view";
-import type { Analysis, Criterion, Evidence } from "@/lib/contracts";
+import { AnalysisView, splitCandidateDecisions } from "@/components/analysis-view";
+import type { Analysis, Criterion, Evidence, TraceStep } from "@/lib/contracts";
 
 const progress = new Map();
 
@@ -234,6 +234,8 @@ describe("AnalysisView states", () => {
       />,
     );
 
+    expect(screen.getByText("See evidence").closest("details")).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("See evidence"));
     expect(screen.getAllByText("The Sample Partner listing is in Portland.").length)
       .toBeGreaterThan(0);
     expect(screen.queryByText("The cited source is identified, but no claim text was returned."))
@@ -259,7 +261,7 @@ describe("AnalysisView states", () => {
     expect(screen.getByText(/Not verified: Fees/)).toBeInTheDocument();
   });
 
-  it("summarizes data-derived verdict counts and explains returned Qloo taste candidates", () => {
+  it("shows the verdict count and explains returned Qloo taste candidates", () => {
     const analysis = analysisWithCandidate();
     const decision = analysis.candidate_decisions[0];
     decision.candidate.candidate.source_seed_names = ["Blue Bottle Coffee"];
@@ -298,7 +300,7 @@ describe("AnalysisView states", () => {
 
     const verdict = screen.getByRole("region", { name: "Verdict" });
     expect(verdict).toHaveTextContent(
-      "1 candidates found · critic cut 1 · recommended: No candidate supported (no candidate supported)",
+      "1 Qloo-suggested candidate, 0 map-only comparison places · critic cut 1 · recommended: No candidate supported (no candidate supported)",
     );
     expect(verdict).toHaveTextContent("No next step was returned.");
     expect(screen.queryByText("Overall decision")).not.toBeInTheDocument();
@@ -309,6 +311,114 @@ describe("AnalysisView states", () => {
       .toBeInTheDocument();
     expect(screen.getByText(/This is a taste signal, not evidence of shared customers/))
       .toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Why this partner" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "The critic's attack" })).toBeInTheDocument();
+    expect(screen.getByText("Provisional → final rating")).toBeInTheDocument();
+  });
+
+  it("counts map-only baselines separately from Qloo-suggested candidates", () => {
+    const qlooDecision = analysisWithCandidate().candidate_decisions[0];
+    const mapDecision = {
+      ...qlooDecision,
+      candidate: {
+        ...qlooDecision.candidate,
+        role: "conventional_baseline" as const,
+        candidate: {
+          ...qlooDecision.candidate.candidate,
+          entity_id: "osm:way/55",
+          name: "Map-only baseline",
+          discovery_basis: "osm_category_baseline" as const,
+        },
+      },
+    };
+
+    const groups = splitCandidateDecisions([qlooDecision, mapDecision]);
+
+    expect(groups.qlooSuggested.map((item) => item.candidate.candidate.name))
+      .toEqual(["Sample Partner"]);
+    expect(groups.mapOnly.map((item) => item.candidate.candidate.name))
+      .toEqual(["Map-only baseline"]);
+
+    const analysis = analysisWithCandidate();
+    analysis.candidate_decisions.push(mapDecision);
+    render(
+      <AnalysisView
+        analysis={analysis}
+        error={null}
+        progress={progress}
+        state="results"
+      />,
+    );
+    expect(screen.getByRole("region", { name: "Verdict" })).toHaveTextContent(
+      "1 Qloo-suggested candidate, 1 map-only comparison place",
+    );
+    fireEvent.click(screen.getByText("See evidence"));
+    expect(
+      screen.getByText(/compared on map verification only; no taste data, so it can't outrank the others/i),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps only the top three debates visible and places remaining debates behind evidence", () => {
+    const analysis = analysisWithCandidate();
+    const baseDecision = analysis.candidate_decisions[0];
+    analysis.candidate_decisions.push(
+      ...["Second Partner", "Third Partner", "Fourth Partner"].map((name, index) => ({
+        ...baseDecision,
+        candidate: {
+          ...baseDecision.candidate,
+          candidate: {
+            ...baseDecision.candidate.candidate,
+            entity_id: `sample-partner-${index + 2}`,
+            name,
+          },
+        },
+      })),
+    );
+
+    render(
+      <AnalysisView
+        analysis={analysis}
+        error={null}
+        progress={progress}
+        state="results"
+      />,
+    );
+
+    const shortlist = screen.getByRole("region", { name: "Top 3 candidates" });
+    expect(within(shortlist).getByRole("heading", { name: "Third Partner" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "More candidate debates" }).closest("details"))
+      .not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("See evidence"));
+    expect(screen.getByRole("heading", { name: "More candidate debates" })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { name: "Fourth Partner" })).toHaveLength(2);
+  });
+
+  it("renders trace timings, result counts, and actual HTTP statuses", () => {
+    const trace: TraceStep[] = [
+      { name: "Plan", duration_ms: 0.2, result_count: 7, http_statuses: [] },
+      { name: "Qloo search", duration_ms: 18.1, result_count: 2, http_statuses: [200] },
+      { name: "Qloo insights", duration_ms: 42.7, result_count: 5, http_statuses: [200] },
+      { name: "Map verification", duration_ms: 31.5, result_count: 4, http_statuses: [200, 200] },
+      { name: "Compare", duration_ms: 3.2, result_count: 1, http_statuses: [] },
+      { name: "Critic", duration_ms: 11.8, result_count: 1, http_statuses: [] },
+      { name: "Decision", duration_ms: 1.4, result_count: 1, http_statuses: [] },
+    ];
+    render(
+      <AnalysisView
+        analysis={analysisWithCandidate()}
+        error={null}
+        progress={progress}
+        state="results"
+        trace={trace}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("See evidence"));
+
+    expect(screen.getByRole("heading", { name: "Agent trace" })).toBeInTheDocument();
+    expect(screen.getByText("18.1 ms · 2 results · HTTP 200")).toBeInTheDocument();
+    expect(screen.getByText("31.5 ms · 4 results · HTTP 200, 200")).toBeInTheDocument();
   });
 
   it("labels an AI-written complementarity line as AI interpretation, not Qloo", () => {
@@ -339,16 +449,13 @@ describe("AnalysisView states", () => {
       <AnalysisView analysis={analysis} error={null} progress={progress} state="results" />,
     );
 
-    const candidateHeading = screen.getByRole("heading", {
-      level: 3,
-      name: "Sample Partner",
-    });
-    const candidateCard = candidateHeading.closest("article");
+    fireEvent.click(screen.getByText("See evidence"));
+    const candidateCard = screen.getByText("Evidence by criterion").closest("article");
     if (!(candidateCard instanceof HTMLElement)) {
       throw new Error("The candidate should have a comparison card.");
     }
     fireEvent.click(within(candidateCard).getByText("Evidence by criterion"));
-    const interpretation = screen.getByText(
+    const interpretation = within(candidateCard).getByText(
       "An AI-written complementary idea, still a hypothesis.",
     );
     const line = interpretation.closest("div.flex");

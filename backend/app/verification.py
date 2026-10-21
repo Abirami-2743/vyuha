@@ -13,6 +13,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .errors import VerificationError
+from .trace_metadata import record_external_call
 
 NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search"
 logger = logging.getLogger("vyuha.verification")
@@ -109,6 +110,7 @@ class NominatimClient:
         return await self._search(f"{search_category} in {clean_market}")
 
     async def _search(self, query: str) -> list[OSMPlace]:
+        started_at = time.perf_counter()
         async with self._request_lock:
             if self._last_request_at is not None:
                 elapsed = time.monotonic() - self._last_request_at
@@ -127,6 +129,12 @@ class NominatimClient:
                     timeout=self._timeout,
                 )
             except httpx.TimeoutException as exc:
+                record_external_call(
+                    "map_verification",
+                    (time.perf_counter() - started_at) * 1000,
+                    None,
+                    None,
+                )
                 raise VerificationError(
                     "verification_timeout",
                     "The independent place lookup timed out.",
@@ -134,6 +142,12 @@ class NominatimClient:
                     retryable=True,
                 ) from exc
             except httpx.RequestError as exc:
+                record_external_call(
+                    "map_verification",
+                    (time.perf_counter() - started_at) * 1000,
+                    None,
+                    None,
+                )
                 raise VerificationError(
                     "verification_unavailable",
                     "The independent place lookup is unavailable.",
@@ -149,6 +163,12 @@ class NominatimClient:
             },
         )
         if response.status_code == 429:
+            record_external_call(
+                "map_verification",
+                (time.perf_counter() - started_at) * 1000,
+                response.status_code,
+                0,
+            )
             raise VerificationError(
                 "verification_rate_limited",
                 "The independent place lookup is rate limited; try again later.",
@@ -156,6 +176,12 @@ class NominatimClient:
                 retryable=True,
             )
         if response.status_code < 200 or response.status_code >= 300:
+            record_external_call(
+                "map_verification",
+                (time.perf_counter() - started_at) * 1000,
+                response.status_code,
+                0,
+            )
             raise VerificationError(
                 "verification_upstream_error",
                 "The independent place lookup did not return a usable response.",
@@ -183,6 +209,12 @@ class NominatimClient:
                 places.append(OSMPlace.model_validate(item))
             except ValidationError as exc:
                 raise self._malformed_response() from exc
+        record_external_call(
+            "map_verification",
+            (time.perf_counter() - started_at) * 1000,
+            response.status_code,
+            len(places),
+        )
         return places
 
     @staticmethod

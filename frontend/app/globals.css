@@ -29,7 +29,8 @@ button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
-select:focus-visible {
+select:focus-visible,
+summary:focus-visible {
   outline: 3px solid #b46c37;
   outline-offset: 3px;
 }
@@ -37,4 +38,42 @@ select:focus-visible {
 ::selection {
   color: #fff;
   background: #174d3e;
+}
+
+@keyframes vyuha-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.stagger-enter > * {
+  animation: vyuha-enter 320ms ease-out both;
+}
+
+.stagger-enter > :nth-child(2) {
+  animation-delay: 70ms;
+}
+
+.stagger-enter > :nth-child(3) {
+  animation-delay: 140ms;
+}
+
+.stagger-enter > :nth-child(4) {
+  animation-delay: 210ms;
+}
+
+.stagger-enter > :nth-child(5) {
+  animation-delay: 280ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stagger-enter > * {
+    animation: none;
+  }
 }

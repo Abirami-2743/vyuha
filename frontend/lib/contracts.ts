@@ -222,6 +222,14 @@ export interface StageEvent {
   status: "running" | "complete" | "degraded" | "failed";
   message: string;
   result: Analysis | null;
+  trace?: TraceStep[] | null;
+}
+
+export interface TraceStep {
+  name: string;
+  duration_ms: number | null;
+  result_count: number | null;
+  http_statuses: number[];
 }
 
 export interface DiscoveryRequest {

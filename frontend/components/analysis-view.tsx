@@ -8,6 +8,7 @@ import type {
   Criticism,
   Evidence,
   Provenance,
+  TraceStep,
 } from "@/lib/contracts";
 import { EvidenceLine, SourceTag } from "@/components/evidence";
 
@@ -35,6 +36,23 @@ const criteria: Array<[keyof CandidateDecision["candidate"], string]> = [
   ["goal_alignment", "Goal alignment"],
   ["uncertainty", "Uncertainty"],
 ];
+
+export function splitCandidateDecisions(decisions: CandidateDecision[]): {
+  qlooSuggested: CandidateDecision[];
+  mapOnly: CandidateDecision[];
+} {
+  return decisions.reduce(
+    (groups, decision) => {
+      if (decision.candidate.candidate.discovery_basis === "osm_category_baseline") {
+        groups.mapOnly.push(decision);
+      } else {
+        groups.qlooSuggested.push(decision);
+      }
+      return groups;
+    },
+    { qlooSuggested: [] as CandidateDecision[], mapOnly: [] as CandidateDecision[] },
+  );
+}
 
 function ratingStyle(rating: string): string {
   if (rating === "STRONG FIT") return "bg-emerald-100 text-emerald-950";
@@ -174,12 +192,10 @@ function readableEntityType(value: string): string {
 
 function CandidateCard({
   item,
-  baselineWithoutTaste,
   indexedEvidence,
   criticTextSource,
 }: {
   item: CandidateDecision;
-  baselineWithoutTaste: boolean;
   indexedEvidence: Map<string, Evidence>;
   criticTextSource: Provenance;
 }) {
@@ -277,12 +293,6 @@ function CandidateCard({
         )}
       </div>
 
-      {baselineWithoutTaste && (
-        <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm leading-6 text-amber-950">
-          Compared on map verification only; no taste data, so it can&apos;t outrank the others.
-        </p>
-      )}
-
       <details className="mt-5 border-t border-line pt-4">
         <summary className="cursor-pointer font-semibold">
           Critic details ({item.criticisms.length})
@@ -377,6 +387,181 @@ function CandidateCard({
   );
 }
 
+function CandidateDebateCard({
+  item,
+  criticTextSource,
+  index,
+}: {
+  item: CandidateDecision;
+  criticTextSource: Provenance;
+  index: number;
+}) {
+  const comparison = item.candidate;
+  const positiveCriteria = criteria.filter(([key]) => {
+    if (
+      key !== "evidence_relevance" &&
+      key !== "taste_affinity" &&
+      key !== "complementarity" &&
+      key !== "geographic_logistical_suitability" &&
+      key !== "budget_compatibility" &&
+      key !== "goal_alignment"
+    ) {
+      return false;
+    }
+    const criterion = comparison[key];
+    return (
+      isCriterion(criterion) &&
+      (criterion.assessment === "supported" || criterion.assessment === "partial")
+    );
+  });
+
+  return (
+    <article
+      className="min-w-0 rounded-xl border border-line bg-white p-5 shadow-sm"
+      style={{ animationDelay: `${index * 70}ms` }}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-700">
+            Candidate {index + 1}
+          </p>
+          <h3 className="mt-1 break-words text-xl font-bold">
+            {comparison.candidate.name}
+          </h3>
+        </div>
+        <RatingBadge rating={item.final_rating} />
+      </div>
+
+      <div className="mt-4 rounded-lg bg-paper p-3">
+        <p className="text-xs font-bold uppercase tracking-wide text-slate-700">
+          Provisional → final rating
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <RatingBadge rating={item.provisional_rating} />
+          <span aria-hidden="true" className="font-bold text-slate-700">→</span>
+          <RatingBadge rating={item.final_rating} />
+          <SourceTag source="rule_based" />
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-4 md:grid-cols-2">
+        <section aria-label={`Why ${comparison.candidate.name} may fit`}>
+          <h4 className="font-bold">Why this partner</h4>
+          {positiveCriteria.length > 0 ? (
+            <ul className="mt-2 space-y-3">
+              {positiveCriteria.map(([key, label]) => {
+                const criterion = comparison[key];
+                if (!isCriterion(criterion)) return null;
+                return (
+                  <li className="rounded-lg border border-line p-3" key={key}>
+                    <p className="text-xs font-semibold text-slate-700">{label}</p>
+                    <div className="mt-1 flex flex-wrap items-start gap-2">
+                      <SourceTag
+                        source={
+                          criterion.evidence.length > 0
+                            ? criterionProvenance(key, criterion)
+                            : "unknown"
+                        }
+                      />
+                      <p className="min-w-0 flex-1 text-sm leading-6 text-slate-800">
+                        {criterion.rationale}
+                      </p>
+                    </div>
+                    {criterion.evidence.map((evidence, evidenceIndex) => (
+                      <EvidenceLine
+                        evidence={evidence}
+                        key={`${evidence.source_reference}-${evidenceIndex}`}
+                      />
+                    ))}
+                  </li>
+                );
+              })}
+            </ul>
+          ) : (
+            <p className="mt-2 flex items-start gap-2 text-sm leading-6 text-slate-700">
+              <SourceTag source="unknown" />
+              No supported positive criteria were returned.
+            </p>
+          )}
+        </section>
+
+        <section aria-label={`Criticism of ${comparison.candidate.name}`}>
+          <h4 className="font-bold">The critic&apos;s attack</h4>
+          {item.criticisms.length > 0 ? (
+            <ul className="mt-2 space-y-3">
+              {item.criticisms.map((criticism, criticismIndex) => (
+                <li
+                  className="rounded-lg border border-line p-3"
+                  key={`${criticism.code}-${criticismIndex}`}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`rounded px-2 py-0.5 text-xs font-bold uppercase ${
+                        criticism.severity === "high"
+                          ? "bg-rose-100 text-rose-900"
+                          : criticism.severity === "medium"
+                            ? "bg-amber-100 text-amber-950"
+                            : "bg-slate-200 text-slate-800"
+                      }`}
+                    >
+                      {criticism.severity} severity
+                    </span>
+                    <SourceTag source={criticTextSource} />
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-slate-800">{criticism.issue}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 flex items-start gap-2 text-sm leading-6 text-slate-700">
+              <SourceTag source="unknown" />
+              No candidate-specific criticism was returned.
+            </p>
+          )}
+        </section>
+      </div>
+    </article>
+  );
+}
+
+function TracePanel({ trace }: { trace: TraceStep[] }) {
+  function formatDuration(durationMs: number): string {
+    return `${durationMs < 1 ? durationMs.toFixed(3) : durationMs.toFixed(1)} ms`;
+  }
+
+  return (
+    <section aria-labelledby="agent-trace-title" className="rounded-xl border border-line bg-white p-5">
+      <h3 className="text-lg font-bold" id="agent-trace-title">Agent trace</h3>
+      {trace.length ? (
+        <ol className="mt-3 divide-y divide-line">
+          {trace.map((step) => (
+            <li
+              className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-3 text-sm"
+              key={step.name}
+            >
+              <span className="font-semibold">{step.name}</span>
+              <span className="text-slate-700">
+                {step.duration_ms === null ? "Not run" : formatDuration(step.duration_ms)}
+                {step.result_count !== null && ` · ${step.result_count} results`}
+                {step.http_statuses.length > 0 &&
+                  ` · HTTP ${step.http_statuses.join(", ")}`}
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="mt-2 text-sm leading-6 text-slate-700">
+          No trace metadata was returned for this result.
+        </p>
+      )}
+      <p className="mt-2 text-xs leading-5 text-slate-700">
+        Durations and counts come from this run&apos;s stream and call metadata. No response bodies
+        or credentials are included.
+      </p>
+    </section>
+  );
+}
+
 export function AnalysisView({
   state,
   analysis,
@@ -385,6 +570,7 @@ export function AnalysisView({
   onRetry,
   isSavedRun = false,
   wakingUp = false,
+  trace = [],
 }: {
   state: ViewState;
   analysis: Analysis | null;
@@ -393,6 +579,7 @@ export function AnalysisView({
   onRetry?: () => void;
   isSavedRun?: boolean;
   wakingUp?: boolean;
+  trace?: TraceStep[];
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState("");
@@ -467,22 +654,24 @@ export function AnalysisView({
           The {isSavedRun ? "saved" : "live"} analysis returned no candidate decisions. Vyuha
           won&apos;t fill the gap with suggestions or estimates.
         </p>
+        <details className="mt-5 border-t border-line pt-4">
+          <summary className="cursor-pointer font-semibold">See evidence</summary>
+          <div className="mt-4">
+            <TracePanel trace={trace} />
+          </div>
+        </details>
       </section>
     );
   }
 
-  const baseline = analysis.discovery.conventional_baseline;
-  const baselineWithoutTaste =
-    baseline !== null &&
-    !baseline.taste_affinity.evidence.some((entry) => entry.source_type === "qloo");
   const selected = analysis.overall_decision.selected_entity_id;
   const sortedDecisions = [...analysis.candidate_decisions].sort((left, right) => {
     const leftSelected = left.candidate.candidate.entity_id === selected ? 1 : 0;
     const rightSelected = right.candidate.candidate.entity_id === selected ? 1 : 0;
-    const leftBaseline = left.candidate.role === "conventional_baseline" ? 1 : 0;
-    const rightBaseline = right.candidate.role === "conventional_baseline" ? 1 : 0;
-    return rightSelected - leftSelected || rightBaseline - leftBaseline;
+    return rightSelected - leftSelected;
   });
+  const candidateGroups = splitCandidateDecisions(sortedDecisions);
+  const topCandidates = candidateGroups.qlooSuggested.slice(0, 3);
   const partial = state === "partial" || analysis.discovery.status === "partial";
   const limitations = [
     ...new Set([
@@ -520,13 +709,19 @@ export function AnalysisView({
         <p className="mt-3 max-w-3xl leading-7 text-slate-700">
           {analysis.overall_decision.rationale}
         </p>
-        <p className="mt-4 text-sm leading-6 text-slate-700">
-          {analysis.candidate_decisions.length} candidates found · critic cut {criticCuts} ·
+        <p className="mt-4 text-sm leading-6 text-slate-800">
+          {candidateGroups.qlooSuggested.length} Qloo-suggested{" "}
+          {candidateGroups.qlooSuggested.length === 1 ? "candidate" : "candidates"},{" "}
+          {candidateGroups.mapOnly.length} map-only comparison{" "}
+          {candidateGroups.mapOnly.length === 1 ? "place" : "places"} · critic cut {criticCuts} ·
           recommended: {recommendedName} ({analysis.overall_decision.result}) · next step: {nextStep}
         </p>
         <p className="mt-2 text-xs leading-5 text-slate-600">
           Candidate and critic counts come from this analysis; a rating is not a probability or
           commercial forecast.
+        </p>
+        <p className="mt-2 text-xs leading-5 text-slate-700">
+          Chain affiliation is unavailable in the returned Qloo and map data; Vyuha does not guess.
         </p>
         {partial && (
           <div className="mt-4 rounded-lg bg-amber-50 p-3 text-sm leading-6 text-amber-950">
@@ -551,31 +746,115 @@ export function AnalysisView({
             customer overlap.
           </p>
         )}
-        {baselineWithoutTaste && (
-          <p className="mt-3 text-xs leading-5 text-slate-600">
-            Compared on map verification only; no taste data, so it can&apos;t outrank the others.
-          </p>
-        )}
       </section>
+
+      {topCandidates.length > 0 && (
+        <section aria-labelledby="top-candidates-title">
+          <div className="mb-4">
+            <p className="text-xs font-bold uppercase tracking-widest text-forest">
+              Shortlist
+            </p>
+            <h2 className="mt-1 text-2xl font-bold" id="top-candidates-title">
+              Top {topCandidates.length}{" "}
+              {topCandidates.length === 1 ? "candidate" : "candidates"}
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-700">
+              Shown in this run&apos;s decision order. Taste affinity is not customer overlap or
+              proof of commercial fit.
+            </p>
+          </div>
+          <div className="stagger-enter grid items-start gap-4 xl:grid-cols-2">
+            {topCandidates.map((item, index) => (
+              <CandidateDebateCard
+                criticTextSource={
+                  analysis.critic_text_status === "llm" ? "ai_interpretation" : "rule_based"
+                }
+                index={index}
+                item={item}
+                key={item.candidate.candidate.entity_id}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      <details className="rounded-xl border border-line bg-white p-5">
+        <summary className="cursor-pointer text-xl font-bold">See evidence</summary>
+        <div className="mt-5 space-y-8">
+          <TracePanel trace={trace} />
+          {candidateGroups.mapOnly.length > 0 && (
+            <details className="rounded-lg border border-line bg-white p-4">
+              <summary className="cursor-pointer font-semibold">
+                {candidateGroups.mapOnly.length} map-only comparison{" "}
+                {candidateGroups.mapOnly.length === 1 ? "place" : "places"} · compared on map
+                verification only; no taste data, so it can&apos;t outrank the others
+              </summary>
+              <div className="stagger-enter mt-4 grid items-start gap-4 xl:grid-cols-2">
+                {candidateGroups.mapOnly.map((item, index) => (
+                  <CandidateDebateCard
+                    criticTextSource={
+                      analysis.critic_text_status === "llm" ? "ai_interpretation" : "rule_based"
+                    }
+                    index={candidateGroups.qlooSuggested.length + index}
+                    item={item}
+                    key={`debate-${item.candidate.candidate.entity_id}`}
+                  />
+                ))}
+              </div>
+              <div className="mt-4 grid items-start gap-4 xl:grid-cols-2">
+                {candidateGroups.mapOnly.map((item) => (
+                  <CandidateCard
+                    criticTextSource={
+                      analysis.critic_text_status === "llm" ? "ai_interpretation" : "rule_based"
+                    }
+                    indexedEvidence={indexedEvidence}
+                    item={item}
+                    key={item.candidate.candidate.entity_id}
+                  />
+                ))}
+              </div>
+            </details>
+          )}
+
+          {candidateGroups.qlooSuggested.length > topCandidates.length && (
+            <section aria-labelledby="more-candidate-debates">
+              <h3 className="text-lg font-bold" id="more-candidate-debates">
+                More candidate debates
+              </h3>
+              <div className="stagger-enter mt-3 grid items-start gap-4 xl:grid-cols-2">
+                {candidateGroups.qlooSuggested
+                  .slice(topCandidates.length)
+                  .map((item, index) => (
+                    <CandidateDebateCard
+                      criticTextSource={
+                        analysis.critic_text_status === "llm"
+                          ? "ai_interpretation"
+                          : "rule_based"
+                      }
+                      index={topCandidates.length + index}
+                      item={item}
+                      key={`debate-${item.candidate.candidate.entity_id}`}
+                    />
+                  ))}
+              </div>
+            </section>
+          )}
 
       <section>
         <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-500">
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-700">
               Candidate comparison
             </p>
           </div>
-          <p className="text-xs text-slate-600">
-            Shown order: selected candidate first (when any), then the conventional alternative,
-            then discovery order. Affinity is a relative signal from Qloo, not customer overlap.
+          <p className="text-xs text-slate-700">
+            Full criterion evidence for Qloo-suggested candidates; map-only comparisons are grouped
+            separately above.
           </p>
         </div>
         <div className="grid items-start gap-4 xl:grid-cols-2">
-          {sortedDecisions.map((item) => (
+          {candidateGroups.qlooSuggested.map((item) => (
             <CandidateCard
-              baselineWithoutTaste={
-                item.candidate.role === "conventional_baseline" && baselineWithoutTaste
-              }
               item={item}
               indexedEvidence={indexedEvidence}
               criticTextSource={
@@ -744,6 +1023,8 @@ export function AnalysisView({
           </ul>
         </section>
       )}
+        </div>
+      </details>
     </div>
   );
 }

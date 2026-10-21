@@ -13,6 +13,7 @@ import type {
   ProgressEvent,
   SavedRun,
   StageEvent,
+  TraceStep,
 } from "@/lib/contracts";
 
 type Screen = "landing" | "brief" | "analysis";
@@ -253,6 +254,7 @@ export default function Home() {
   const [activeDemoId, setActiveDemoId] = useState<DemoId | null>(null);
   const [analysisIsSaved, setAnalysisIsSaved] = useState(false);
   const [progress, setProgress] = useState<Map<string, ProgressEvent>>(new Map());
+  const [trace, setTrace] = useState<TraceStep[]>([]);
   const [loading, setLoading] = useState(false);
   const [healthCheckWakingUp, setHealthCheckWakingUp] = useState(false);
   const [analysisWakingUp, setAnalysisWakingUp] = useState(false);
@@ -341,6 +343,7 @@ export default function Home() {
     setActiveSavedRun(null);
     setAnalysisIsSaved(false);
     setProgress(new Map());
+    setTrace([]);
     setAnalysisWakingUp(false);
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 240_000);
@@ -359,6 +362,7 @@ export default function Home() {
             return next;
           });
           if (event.status === "failed") throw new Error(event.message);
+          if (event.trace) setTrace(event.trace);
           if (event.result) {
             setAnalysis(event.result);
             receivedResult = true;
@@ -548,6 +552,7 @@ export default function Home() {
     setAnalysisIsSaved(true);
     setCurrentRequest(null);
     setProgress(new Map());
+    setTrace([]);
     setScreen("analysis");
   }
 
@@ -582,6 +587,9 @@ export default function Home() {
               Find cross-industry collaboration ideas, inspect the evidence, and pressure-test a
               small experiment before committing your budget.
             </p>
+            <p className="mt-4 text-lg font-bold text-forest">
+              Every AI recommends. Vyuha argues back.
+            </p>
           </div>
 
           <section aria-labelledby="how-vyuha-works" className="mt-10 max-w-4xl rounded-xl border border-line bg-white p-5 sm:p-7">
@@ -600,6 +608,20 @@ export default function Home() {
             <p className="mt-4 flex flex-wrap items-center gap-2 text-sm leading-6 text-slate-700">
               <SourceTag source="qloo" />
               Qloo contributes cross-category taste affinity—not proof of shared customers, demand, or success.
+            </p>
+          </section>
+
+          <section
+            aria-labelledby="never-claims"
+            className="mt-5 max-w-4xl rounded-xl border border-line bg-white p-5 sm:p-7"
+          >
+            <h2 className="text-xl font-bold" id="never-claims">
+              What Vyuha will never claim
+            </h2>
+            <p className="mt-2 text-sm leading-6 text-slate-700">
+              Taste affinity is not customer overlap, purchase intent, attendance, or commercial
+              success. A map listing does not prove ownership or current operation. Unknowns stay
+              unknown until verified.
             </p>
           </section>
 
@@ -625,7 +647,7 @@ export default function Home() {
                 Type your own brief
               </button>
             </div>
-            <ul className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <ul className="stagger-enter mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {demoDefinitions.map((demo) => {
                 const saved = savedRuns[demo.id];
                 return (
@@ -941,6 +963,7 @@ export default function Home() {
                   : undefined
               }
               progress={progress}
+              trace={trace}
               state={viewState}
               isSavedRun={analysisIsSaved}
               wakingUp={analysisWakingUp}

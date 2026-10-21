@@ -59,3 +59,12 @@ Updated: October 18, 2026
 - Browser verified all five live buttons (including explicit identity pickers for Blue Bottle, The Ordinary, and Starbucks; the invented business returned the live empty state), all five saved-run views and their “not live” banners, a missing-file 404/hidden button, and 375px layout without horizontal overflow.
 - Final checks: `python -m pytest tests -q` (64 passed), Ruff (all checks passed after removing two unused imports), mypy (13 source files), npm lint/typecheck, frontend tests (13 passed), and production build all passed. Ruff and frontend tests were rerun after their initial targeted failures were corrected.
 - No commit or deployment was made. Hosted Render/Vercel secret-file and live-provider verification remains next.
+
+## Signature product work — October 20, 2026
+
+- Verdict now reports separate data-derived counts for Qloo-suggested candidates and OSM-only baseline places. The top three candidates lead with a provenance-tagged positive case, critic severity, and provisional-to-final rating; remaining debates and detailed evidence sit behind “See evidence.” Map-only places expand from one summary line.
+- Added streamed agent trace metadata for Plan, Qloo Search, Qloo Insights, map verification, compare, critic, and decision. External-call durations, result counts, and observed HTTP statuses are request-local; raw provider bodies and credentials are excluded.
+- Added the landing-page pitch and “What Vyuha will never claim” section, reduced-motion-aware staggered entrances, and an explicit note that chain affiliation is unknown because available source data has no reliable chain signal.
+- Backend checks: pytest 64 passed; Ruff passed after a line-length correction; mypy succeeded for 14 source files. Frontend lint, typecheck, and production build succeeded; Vitest passed all 16 tests after refining one disclosure-visibility assertion.
+- Browser verified using the existing dated real saved Blue Bottle analysis (not a new live run): 375px viewport without horizontal overflow (document width 360px), three shortlist cards, keyboard-accessible evidence summary with visible focus outline, reduced-motion animation disabled, and 16.15:1 summary-text contrast on white.
+- Powell’s Books / Portland seed-brand exploration was not run; the optional live demo was left unchanged. No commit or deployment was made.
