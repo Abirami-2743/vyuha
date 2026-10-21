@@ -98,7 +98,10 @@ describe("judge-first pages", () => {
     const navigate = vi.fn();
     render(<HomePage onNavigate={navigate} />);
 
-    expect(screen.getByText(/Small businesses guess who to partner with/)).toBeInTheDocument();
+    const headline = screen.getByRole("heading", { level: 1, name: /Find an unexpected partner/ });
+    expect(headline).toBeInTheDocument();
+    expect((headline.textContent ?? "").trim().split(/\s+/)).toHaveLength(15);
+    expect(screen.getByText(/Qloo's taste clues help surface ideas worth testing/)).toBeInTheDocument();
     expect(screen.queryByText(/whose customers already love what yours love/)).not.toBeInTheDocument();
     expect(
       screen.getByText(/Groq \(primary model\) with a second Groq model as fallback/),

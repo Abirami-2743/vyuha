@@ -188,7 +188,79 @@ describe("AnalysisView states", () => {
     );
 
     expect(screen.getByText("No candidates to compare")).toBeInTheDocument();
-    expect(screen.getByText(/won't fill the gap with suggestions/i)).toBeInTheDocument();
+    expect(screen.getByText(/won.t fill the gap with suggestions/i)).toBeInTheDocument();
+  });
+
+  it("explains when the business listing could not be found", () => {
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        business_identity: {
+          ...emptyAnalysis.discovery.business_identity,
+          status: "not_found",
+          osm_status: "not_found",
+        },
+      },
+    };
+    render(<AnalysisView analysis={analysis} error={null} progress={progress} state="empty" />);
+
+    expect(screen.getByRole("heading", { name: "This business could not be found" }))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Check the business name and market/)).toBeInTheDocument();
+  });
+
+  it("explains when map listings exist but none match the requested market", () => {
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        business_identity: {
+          ...emptyAnalysis.discovery.business_identity,
+          status: "not_found",
+          osm_status: "not_found",
+          osm_options: [
+            {
+              osm_type: "node",
+              osm_id: 1,
+              name: "Example business",
+              display_name: "Example business, another market",
+              category: "shop",
+              type: "retail",
+              lat: "0",
+              lon: "0",
+            },
+          ],
+        },
+      },
+    };
+    render(<AnalysisView analysis={analysis} error={null} progress={progress} state="empty" />);
+
+    expect(
+      screen.getByRole("heading", { name: "No matching listing was found in this market" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Check the city or try a broader target market/)).toBeInTheDocument();
+  });
+
+  it("explains when Qloo did not return an eligible business match", () => {
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        business_identity: {
+          ...emptyAnalysis.discovery.business_identity,
+          status: "not_found",
+          osm_status: "verified",
+          qloo_status: "not_found",
+        },
+      },
+    };
+    render(<AnalysisView analysis={analysis} error={null} progress={progress} state="empty" />);
+
+    expect(screen.getByRole("heading", { name: "Qloo returned no matching business" }))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Qloo Search did not return an eligible brand match/))
+      .toBeInTheDocument();
   });
 
   it("does not describe a saved empty result as live", () => {
@@ -221,6 +293,58 @@ describe("AnalysisView states", () => {
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent("Qloo credentials are not configured.");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+
+  it("shows the required AI-busy message and offers saved results", () => {
+    const onViewSaved = vi.fn();
+    render(
+      <AnalysisView
+        analysis={null}
+        error="The AI service is busy, try again in a minute or view the saved result"
+        onViewSaved={onViewSaved}
+        progress={progress}
+        state="error"
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The AI service is busy, try again in a minute or view the saved result",
+    );
+    screen.getByRole("link", { name: "Browse saved results" }).click();
+    expect(onViewSaved).toHaveBeenCalledOnce();
+  });
+
+  it("offers saved results when the run is rate limited", () => {
+    render(
+      <AnalysisView
+        analysis={null}
+        error="Qloo is temporarily rate limiting requests."
+        onViewSaved={vi.fn()}
+        progress={progress}
+        state="error"
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "A rate limit was reached" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Browse saved results" })).toBeInTheDocument();
+  });
+
+  it("explains that an unresponsive backend may still be waking up", () => {
+    render(
+      <AnalysisView
+        analysis={null}
+        error="Failed to fetch"
+        onRetry={vi.fn()}
+        progress={progress}
+        state="error"
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "The backend did not respond" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("It may still be waking up");
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
   });
 

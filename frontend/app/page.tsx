@@ -2,10 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnalysisView } from "@/components/analysis-view";
+import { BusinessBriefForm } from "@/components/business-brief-form";
 import { SourceTag } from "@/components/evidence";
 import { SavedRunBanner } from "@/components/saved-run-banner";
 import { RoutedJudgePage } from "@/components/judge-pages";
+import { SiteHeader } from "@/components/site-header";
 import { analyze, checkApi, getSavedRun } from "@/lib/api";
+import { emptyBrief, validateBrief, type BriefFields } from "@/lib/brief";
 import demoDefinitions from "@/lib/demo-definitions.json";
 import type {
   Analysis,
@@ -25,28 +28,6 @@ type ChoiceState = {
   seedIds: Record<string, string>;
 };
 type Demo = (typeof demoDefinitions)[number];
-
-const initialBrief = {
-  businessName: "",
-  industry: "",
-  city: "",
-  targetMarket: "",
-  website: "",
-  identifyingInfo: "",
-  goal: "",
-  budgetMin: "0",
-  budgetMax: "500",
-  requirements: "",
-  constraints: "",
-  seeds: "",
-};
-
-function lines(value: string): string[] {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
 
 function placeLabel(place: Place): string {
   return `${place.name} — ${place.display_name}`;
@@ -245,8 +226,7 @@ export default function Home() {
   const [screen, setScreen] = useState<Screen>("landing");
   const [apiReady, setApiReady] = useState<boolean | null>(null);
   const [apiMessage, setApiMessage] = useState("");
-  const [form, setForm] = useState(initialBrief);
-  const [formError, setFormError] = useState("");
+  const [form, setForm] = useState<BriefFields>(emptyBrief);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [savedRun, setSavedRun] = useState<SavedRun | null>(null);
@@ -487,99 +467,7 @@ export default function Home() {
     }
   }, [navigate, savedRun, savedRuns]);
 
-  function createRequest(values: typeof initialBrief = form): DiscoveryRequest | null {
-    const minimum = Number(values.budgetMin);
-    const maximum = Number(values.budgetMax);
-    const seeds = lines(values.seeds);
-    const requirements = lines(values.requirements);
-    const constraints = lines(values.constraints);
-    if (!values.businessName.trim()) {
-      setFormError("Enter the business name.");
-      return null;
-    }
-    if (
-      values.businessName.trim().length > 160 ||
-      values.industry.trim().length > 160 ||
-      values.city.trim().length > 120 ||
-      values.targetMarket.trim().length > 240
-    ) {
-      setFormError("Business name, industry, city, or target market exceeds its allowed length.");
-      return null;
-    }
-    if (!values.goal.trim() || values.goal.trim().length < 10) {
-      setFormError("Describe the collaboration goal in at least 10 characters.");
-      return null;
-    }
-    if (values.goal.trim().length > 2000 || values.identifyingInfo.trim().length > 1000) {
-      setFormError("The collaboration goal or identifying information exceeds its allowed length.");
-      return null;
-    }
-    if (
-      !Number.isFinite(minimum) ||
-      !Number.isFinite(maximum) ||
-      values.budgetMin.trim() === "" ||
-      values.budgetMax.trim() === "" ||
-      minimum < 0 ||
-      maximum < minimum
-    ) {
-      setFormError("Enter a valid budget range; the maximum must be at least the minimum.");
-      return null;
-    }
-    if (!values.city.trim() && !values.targetMarket.trim()) {
-      setFormError("Enter a city or target market.");
-      return null;
-    }
-    if (!values.website.trim() && !values.identifyingInfo.trim()) {
-      setFormError("Enter a website or other information that identifies the business.");
-      return null;
-    }
-    if (
-      (values.website.trim() && !/^https?:\/\/.+/i.test(values.website.trim())) ||
-      (values.website.trim() && !URL.canParse(values.website.trim()))
-    ) {
-      setFormError("Enter a complete website address starting with http:// or https://.");
-      return null;
-    }
-    if (seeds.length > 3) {
-      setFormError("Add no more than 3 seed brands.");
-      return null;
-    }
-    if (new Set(seeds.map((seed) => seed.toLocaleLowerCase())).size !== seeds.length) {
-      setFormError("Seed brands must be distinct.");
-      return null;
-    }
-    if (seeds.some((seed) => seed.length > 160)) {
-      setFormError("Each seed brand must be 160 characters or fewer.");
-      return null;
-    }
-    if (requirements.length > 30 || constraints.length > 30) {
-      setFormError("Enter no more than 30 event requirements and 30 constraints.");
-      return null;
-    }
-    if ([...requirements, ...constraints].some((item) => item.length > 500)) {
-      setFormError("Each event requirement and constraint must be 500 characters or fewer.");
-      return null;
-    }
-
-    setFormError("");
-    return {
-      brief: {
-        business_name: values.businessName.trim(),
-        industry: values.industry.trim() || null,
-        city: values.city.trim() || null,
-        target_market: values.targetMarket.trim() || null,
-        website: values.website.trim() || null,
-        identifying_info: values.identifyingInfo.trim() || null,
-        collaboration_goal: values.goal.trim(),
-        budget_range: { minimum, maximum, currency: "USD" },
-        event_requirements: requirements,
-        constraints,
-      },
-      seed_brands: seeds.map((name) => ({ name })),
-    };
-  }
-
-  function updateField(field: keyof typeof initialBrief, value: string) {
+  function updateField(field: keyof BriefFields, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
   }
 
@@ -592,8 +480,8 @@ export default function Home() {
   }, [analysis, analysisError, loading]);
 
   function startDemo(demo: (typeof demoDefinitions)[number]) {
-    const values = {
-      ...initialBrief,
+    const values: BriefFields = {
+      ...emptyBrief,
       businessName: demo.input.business_name,
       industry: demo.input.industry,
       city: demo.input.city,
@@ -608,7 +496,7 @@ export default function Home() {
       seeds: demo.input.seed_brands.join("\n"),
     };
     setForm(values);
-    const request = createRequest(values);
+    const request = validateBrief(values).request;
     if (request) void submitAnalysis(request, demo.id);
   }
 
@@ -659,33 +547,17 @@ export default function Home() {
 
   return (
     <main className="min-h-screen">
-      <header className="border-b border-line bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-5 py-4 sm:px-8">
-          <button
-            aria-label={`Back to ${backTarget() === "/" ? "home" : backTarget()}`}
-            className="min-h-11 shrink-0 rounded-lg px-2 text-sm font-semibold text-forest hover:bg-paper"
-            onClick={handleBack}
-            type="button"
-          >
-            {route === "/analyze" && loading ? "Cancel run" : "← Back"}
-          </button>
-          <button
-            aria-label="Vyuha home"
-            className="text-lg font-black tracking-tight text-forest"
-            onClick={() => {
-              setScreen("landing");
-              navigate("/");
-            }}
-            type="button"
-          >
-            Vyuha<span className="text-ink">.</span>
-          </button>
-          <nav aria-label="Main navigation" className="flex items-center gap-3 text-sm font-semibold">
-            <button className="min-h-11 text-forest hover:underline" onClick={() => { setScreen("landing"); navigate("/"); }} type="button">Home</button>
-            <button className="min-h-11 text-forest hover:underline" onClick={() => navigate("/about")} type="button">About</button>
-          </nav>
-        </div>
-      </header>
+      <SiteHeader
+        backLabel={backTarget() === "/" ? "home" : backTarget()}
+        backText={route === "/analyze" && loading ? "Cancel run" : "← Back"}
+        onAbout={() => navigate("/about")}
+        onBack={handleBack}
+        onHome={() => {
+          setScreen("landing");
+          navigate("/");
+        }}
+        route={route}
+      />
 
       {routeReady && route !== "/analyze" && (
         <>
@@ -700,7 +572,11 @@ export default function Home() {
           <RoutedJudgePage
             analysis={analysis}
             onNavigate={(path) => {
-              if (path === "/analyze") setScreen("brief");
+              if (path === "/analyze") {
+                setForm(emptyBrief);
+                setActiveDemoId(null);
+                setScreen("brief");
+              }
               navigate(path);
             }}
             onRun={runDemo}
@@ -777,7 +653,7 @@ export default function Home() {
               <button
                 className="rounded-lg bg-forest px-5 py-3 font-semibold text-white hover:bg-emerald-950"
                 onClick={() => {
-                  setForm(initialBrief);
+                  setForm(emptyBrief);
                   setActiveDemoId(null);
                   setScreen("brief");
                 }}
@@ -882,165 +758,12 @@ export default function Home() {
             to the live analysis backend; it does not generate sample partners.
           </p>
 
-          <form
-            className="mt-8 space-y-6 rounded-xl border border-line bg-white p-5 sm:p-8"
-            noValidate
-            onSubmit={(event) => {
-              event.preventDefault();
-              const request = createRequest();
-              if (request) void submitAnalysis(request);
-            }}
-          >
-            <div className="grid gap-5 sm:grid-cols-2">
-              <label className="block text-sm font-semibold">
-                Business name <span className="text-rose-700">*</span>
-                <input
-                  autoComplete="organization"
-                  className="mt-2 w-full rounded-lg border border-line bg-paper px-3 py-2.5 font-normal"
-                  maxLength={160}
-                  onChange={(event) => updateField("businessName", event.target.value)}
-                  required
-                  value={form.businessName}
-                />
-              </label>
-              <label className="block text-sm font-semibold">
-                Industry
-                <input
-                  className="mt-2 w-full rounded-lg border border-line bg-paper px-3 py-2.5 font-normal"
-                  maxLength={160}
-                  onChange={(event) => updateField("industry", event.target.value)}
-                  value={form.industry}
-                />
-              </label>
-              <label className="block text-sm font-semibold">
-                City
-                <input
-                  autoComplete="address-level2"
-                  className="mt-2 w-full rounded-lg border border-line bg-paper px-3 py-2.5 font-normal"
-                  maxLength={120}
-                  onChange={(event) => updateField("city", event.target.value)}
-                  value={form.city}
-                />
-              </label>
-              <label className="block text-sm font-semibold">
-                Broader target market
-                <input
-                  className="mt-2 w-full rounded-lg border border-line bg-paper px-3 py-2.5 font-normal"
-                  maxLength={240}
-                  onChange={(event) => updateField("targetMarket", event.target.value)}
-                  value={form.targetMarket}
-                />
-              </label>
-              <label className="block text-sm font-semibold sm:col-span-2">
-                Website
-                <input
-                  autoComplete="url"
-                  className="mt-2 w-full rounded-lg border border-line bg-paper px-3 py-2.5 font-normal"
-                  onChange={(event) => updateField("website", event.target.value)}
-                  placeholder="https://example.com"
-                  type="url"
-                  value={form.website}
-                />
-              </label>
-              <label className="block text-sm font-semibold sm:col-span-2">
-                Other identifying information
-                <textarea
-                  className="mt-2 min-h-20 w-full rounded-lg border border-line bg-paper px-3 py-2.5 font-normal"
-                  maxLength={1000}
-                  onChange={(event) => updateField("identifyingInfo", event.target.value)}
-                  value={form.identifyingInfo}
-                />
-                <span className="mt-1 block text-xs font-normal text-slate-600">
-                  Provide a website or this identifying information.
-                </span>
-              </label>
-              <label className="block text-sm font-semibold sm:col-span-2">
-                Collaboration goal <span className="text-rose-700">*</span>
-                <textarea
-                  className="mt-2 min-h-28 w-full rounded-lg border border-line bg-paper px-3 py-2.5 font-normal"
-                  maxLength={2000}
-                  minLength={10}
-                  onChange={(event) => updateField("goal", event.target.value)}
-                  placeholder="What would a useful, low-risk collaboration help you learn or do?"
-                  required
-                  value={form.goal}
-                />
-              </label>
-            </div>
-
-            <fieldset>
-              <legend className="text-sm font-semibold">Budget range (USD)</legend>
-              <div className="mt-2 grid gap-4 sm:grid-cols-2">
-                <label className="text-sm">
-                  Minimum
-                  <input
-                    className="mt-1 w-full rounded-lg border border-line bg-paper px-3 py-2.5"
-                    min="0"
-                    onChange={(event) => updateField("budgetMin", event.target.value)}
-                    type="number"
-                    value={form.budgetMin}
-                  />
-                </label>
-                <label className="text-sm">
-                  Maximum
-                  <input
-                    className="mt-1 w-full rounded-lg border border-line bg-paper px-3 py-2.5"
-                    min="0"
-                    onChange={(event) => updateField("budgetMax", event.target.value)}
-                    type="number"
-                    value={form.budgetMax}
-                  />
-                </label>
-              </div>
-            </fieldset>
-
-            <div className="grid gap-5 sm:grid-cols-2">
-              <label className="block text-sm font-semibold">
-                Event requirements
-                <textarea
-                  className="mt-2 min-h-24 w-full rounded-lg border border-line bg-paper px-3 py-2.5 font-normal"
-                  placeholder="One item per line"
-                  onChange={(event) => updateField("requirements", event.target.value)}
-                  value={form.requirements}
-                />
-              </label>
-              <label className="block text-sm font-semibold">
-                Constraints
-                <textarea
-                  className="mt-2 min-h-24 w-full rounded-lg border border-line bg-paper px-3 py-2.5 font-normal"
-                  placeholder="One item per line"
-                  onChange={(event) => updateField("constraints", event.target.value)}
-                  value={form.constraints}
-                />
-              </label>
-            </div>
-
-            <label className="block text-sm font-semibold">
-              Optional seed brands (up to 3)
-              <textarea
-                className="mt-2 min-h-20 w-full rounded-lg border border-line bg-paper px-3 py-2.5 font-normal"
-                placeholder="One brand per line"
-                onChange={(event) => updateField("seeds", event.target.value)}
-                value={form.seeds}
-              />
-              <span className="mt-1 block text-xs font-normal leading-5 text-slate-600">
-                If Qloo doesn&apos;t know your brand, name brands your customers like.
-              </span>
-            </label>
-
-            {(formError || analysisError) && (
-              <p className="rounded-lg border border-rose-300 bg-rose-50 p-3 text-sm text-rose-900">
-                {formError || analysisError}
-              </p>
-            )}
-            <button
-              className="w-full rounded-lg bg-forest px-5 py-3 font-semibold text-white hover:bg-emerald-950 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
-              disabled={loading}
-              type="submit"
-            >
-              Discover partners
-            </button>
-          </form>
+          <BusinessBriefForm
+            onChange={updateField}
+            onSubmit={(request) => void submitAnalysis(request)}
+            submitting={loading}
+            values={form}
+          />
         </section>
       )}
 
@@ -1093,6 +816,7 @@ export default function Home() {
                   ? () => void submitAnalysis(currentRequest, activeDemoId ?? undefined)
                   : undefined
               }
+              onViewSaved={() => navigate("/demos")}
               progress={progress}
               trace={trace}
               state={viewState}

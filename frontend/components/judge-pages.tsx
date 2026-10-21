@@ -135,9 +135,7 @@ export function HomePage({ onNavigate }: { onNavigate: (path: string) => void })
           Partnership decisions for small businesses
         </p>
         <h1 className="mt-4 text-4xl font-bold leading-tight tracking-tight sm:text-6xl">
-          Small businesses guess who to partner with. Vyuha uses Qloo&apos;s taste signals to find
-          unexpected partner options, then challenges its own pick before you risk money on a
-          collaboration.
+          Find an unexpected partner with Qloo, then challenge the idea before you spend a dollar.
         </h1>
         <p className="mt-5 max-w-3xl text-lg leading-8 text-slate-700">
           Qloo&apos;s taste clues help surface ideas worth testing; Vyuha checks the evidence,

@@ -120,3 +120,31 @@ Updated: October 21, 2026
 ### Next
 
 - Configure the existing server-side environment variables and, when authorized, verify `GET /`, `/health`, a live analysis, and the saved-result fallback on the hosted deployment.
+
+## Navigation, Home, and business brief — October 21, 2026
+
+### Done
+
+- Removed Back from Home only; retained Back alongside Home and About navigation on other routes.
+- Shortened the Home headline to 15 words and kept Qloo's role in the subheading.
+- Fixed shared brief state so a new business brief starts empty, including both budget fields. Returning to the Home CTA after a demo also resets the brief.
+- Added four editable example chips (cafe, skincare shop, gym, bookstore). Each fills every field without submitting; tests verify a later selection replaces the earlier example rather than mixing business text.
+- Added visible required markers and the website-or-description rule before submission. Invalid fields are highlighted; the first invalid field is scrolled into view and focused.
+- Added run-aware guidance for missing business listings, no local-market match, no eligible Qloo business match, rate limits, AI-service busy responses, and an unresponsive/waking backend. Rate-limit and AI-busy states link to the saved-results gallery.
+
+### Verified
+
+- Frontend `npm run lint`, `npm run typecheck`, `npm test`, and `npm run build`: passed; Vitest reports 6 files and 42 tests passed.
+- Backend `python -m pytest tests -q`: 67 passed.
+- Backend `python -m ruff check backend tests --config backend\pyproject.toml`: all checks passed.
+- Backend `python -m mypy --config-file backend\pyproject.toml backend\app`: success for 14 source files.
+- Browser checked the Home and About navigation, blank form, all four examples, and website-or-description validation. At a 375px viewport, the page had no horizontal overflow; at desktop width it also had no horizontal overflow. The validation message appeared and focus moved to the invalid website field.
+- `git diff --check`: passed. No commit or deployment was made.
+
+### Blocked / unverified
+
+- The local frontend browser session could not reach the backend at `127.0.0.1:8000` (`ERR_CONNECTION_REFUSED` on health/saved-run requests). Live API error responses, saved-result availability, and a live Qloo/LLM run were not verified; failure guidance is covered by component tests.
+
+### Next
+
+- When authorized and the backend is running with configured credentials, verify the live analysis flow and saved-result links against actual service responses.

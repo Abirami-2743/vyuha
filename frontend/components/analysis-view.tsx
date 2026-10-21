@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import type {
   Analysis,
   CandidateDecision,
@@ -566,6 +567,7 @@ export function AnalysisView({
   error,
   progress,
   onRetry,
+  onViewSaved,
   isSavedRun = false,
   wakingUp = false,
   trace = [],
@@ -575,6 +577,7 @@ export function AnalysisView({
   error: string | null;
   progress: Map<string, { status: string; message: string }>;
   onRetry?: () => void;
+  onViewSaved?: () => void;
   isSavedRun?: boolean;
   wakingUp?: boolean;
   trace?: TraceStep[];
@@ -622,14 +625,30 @@ export function AnalysisView({
   }
 
   if (state === "error") {
+    const errorMessage = error ?? "";
+    const aiBusy = errorMessage.includes("The AI service is busy");
+    const rateLimited = /rate.?limit|analysis_limit|daily .*limit/i.test(errorMessage);
+    const backendUnavailable = /failed to fetch|network|timed? ?out|backend.*unavailable/i.test(
+      errorMessage,
+    );
+    const title = aiBusy
+      ? "The AI service is busy"
+      : rateLimited
+        ? "A rate limit was reached"
+        : backendUnavailable
+          ? "The backend did not respond"
+          : "Analysis could not be completed";
     return (
       <section role="alert" className="rounded-xl border border-rose-300 bg-white p-6">
-        <h2 className="text-lg font-bold">Analysis could not be completed</h2>
+        <h2 className="text-lg font-bold">{title}</h2>
         <p className="mt-2 text-sm leading-6 text-slate-700">
-          {error || "The backend returned an error without further details."}
-        </p>
-        <p className="mt-2 text-sm text-slate-600">
-          Check the backend configuration and connection, then try again.
+          {aiBusy
+            ? "The AI service is busy, try again in a minute or view the saved result."
+            : rateLimited
+              ? "A service or daily analysis limit was reached. Browse saved results, or try again when the limit resets."
+              : backendUnavailable
+                ? "The backend did not respond. It may still be waking up; check the connection and try again."
+                : error || "The backend returned an error without further details."}
         </p>
         {onRetry && (
           <button
@@ -640,18 +659,59 @@ export function AnalysisView({
             Try again
           </button>
         )}
+        {!aiBusy && !rateLimited && !backendUnavailable && (
+          <p className="mt-2 text-sm text-slate-600">
+            Next: check the connection and try again.
+          </p>
+        )}
+        {(aiBusy || rateLimited) && onViewSaved && (
+          <Link
+            className="mt-4 inline-flex rounded-lg border border-line px-4 py-2 font-semibold text-forest hover:bg-paper sm:ml-3"
+            href="/demos"
+            onClick={(event) => {
+              event.preventDefault();
+              onViewSaved();
+            }}
+          >
+            Browse saved results
+          </Link>
+        )}
       </section>
     );
   }
 
   if (state === "empty" || !analysis || !analysis.candidate_decisions.length) {
+    const identity = analysis?.discovery.business_identity;
+    const noLocalMatch = identity?.osm_status === "not_found";
+    const noQlooMatch = identity?.qloo_status === "not_found";
+    const hasOtherMarketListings = (identity?.osm_options.length ?? 0) > 0;
+    const title = noLocalMatch
+      ? hasOtherMarketListings
+        ? "No matching listing was found in this market"
+        : "This business could not be found"
+      : noQlooMatch
+        ? "Qloo returned no matching business"
+        : "No candidates to compare";
+    const nextStep = noLocalMatch
+      ? hasOtherMarketListings
+        ? "Check the city or try a broader target market, then submit the brief again."
+        : "Check the business name and market, or add a website or short description and try again."
+      : noQlooMatch
+        ? "Check the business name, or add seed brands your customers like and try again."
+        : "Check the business name, market, and seed brands, then try again.";
     return (
       <section className="rounded-xl border border-line bg-white p-6">
-        <h2 className="text-lg font-bold">No candidates to compare</h2>
+        <h2 className="text-lg font-bold">{title}</h2>
         <p className="mt-2 text-sm leading-6 text-slate-700">
-          The {isSavedRun ? "saved" : "live"} analysis returned no candidate decisions. Vyuha
-          won&apos;t fill the gap with suggestions or estimates.
+          {noLocalMatch
+            ? hasOtherMarketListings
+              ? "The map lookup returned listings, but none was verified as an exact match in the requested market."
+              : "The map lookup did not return an exact-name listing in the requested market."
+            : noQlooMatch
+              ? "Qloo Search did not return an eligible brand match for this business."
+              : `The ${isSavedRun ? "saved" : "live"} analysis returned no candidate decisions. Vyuha won’t fill the gap with suggestions or estimates.`}
         </p>
+        <p className="mt-2 text-sm leading-6 text-slate-700">{nextStep}</p>
         <details className="mt-5 border-t border-line pt-4">
           <summary className="cursor-pointer font-semibold">See evidence</summary>
           <div className="mt-4">
