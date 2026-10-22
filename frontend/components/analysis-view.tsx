@@ -570,6 +570,7 @@ export function AnalysisView({
   onViewSaved,
   isSavedRun = false,
   wakingUp = false,
+  takingLong = false,
   trace = [],
 }: {
   state: ViewState;
@@ -580,6 +581,7 @@ export function AnalysisView({
   onViewSaved?: () => void;
   isSavedRun?: boolean;
   wakingUp?: boolean;
+  takingLong?: boolean;
   trace?: TraceStep[];
 }) {
   const [draft, setDraft] = useState<string | null>(null);
@@ -591,9 +593,27 @@ export function AnalysisView({
         <p className="font-semibold">Analysis in progress</p>
         {wakingUp && (
           <p className="mt-2 text-sm leading-6 text-slate-700">
-            Waking up the server. Free hosted instances can take up to a minute; the request stays
-            open while the service starts.
+            Waking up the AI engine, this can take up to 40 seconds.
           </p>
+        )}
+        {takingLong && (
+          <div className="mt-4 rounded-lg bg-paper p-4" role="status">
+            <p className="text-sm leading-6 text-slate-700">
+              This run is taking longer than a minute. You can keep waiting or open a saved result.
+            </p>
+            {onViewSaved && (
+              <Link
+                className="mt-3 inline-flex rounded-lg border border-line px-4 py-2 text-sm font-semibold text-forest hover:bg-white"
+                href="/demos"
+                onClick={(event) => {
+                  event.preventDefault();
+                  onViewSaved();
+                }}
+              >
+                Browse saved results
+              </Link>
+            )}
+          </div>
         )}
         <ul className="mt-5 space-y-3">
           {stageLabels.map(([stage, label]) => {
@@ -664,7 +684,7 @@ export function AnalysisView({
             Next: check the connection and try again.
           </p>
         )}
-        {(aiBusy || rateLimited) && onViewSaved && (
+        {onViewSaved && (
           <Link
             className="mt-4 inline-flex rounded-lg border border-line px-4 py-2 font-semibold text-forest hover:bg-paper sm:ml-3"
             href="/demos"

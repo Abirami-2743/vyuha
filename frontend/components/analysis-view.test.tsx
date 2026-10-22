@@ -157,7 +157,7 @@ describe("AnalysisView states", () => {
     );
 
     expect(screen.getByText("Analysis in progress")).toBeInTheDocument();
-    expect(screen.queryByText(/Waking up the server/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Waking up the AI engine/)).not.toBeInTheDocument();
     expect(screen.getByText("Arguing against the pick")).toBeInTheDocument();
     expect(screen.getByLabelText("running")).toBeInTheDocument();
     expect(screen.getAllByLabelText("not started").length).toBeGreaterThan(0);
@@ -174,7 +174,43 @@ describe("AnalysisView states", () => {
       />,
     );
 
-    expect(screen.getByText(/Waking up the server/)).toBeInTheDocument();
+    expect(
+      screen.getByText("Waking up the AI engine, this can take up to 40 seconds."),
+    ).toBeInTheDocument();
+  });
+
+  it("offers saved results after a run takes longer than a minute", () => {
+    const onViewSaved = vi.fn();
+    render(
+      <AnalysisView
+        analysis={null}
+        error={null}
+        onViewSaved={onViewSaved}
+        progress={progress}
+        state="loading"
+        takingLong
+      />,
+    );
+
+    expect(screen.getByText(/taking longer than a minute/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "Browse saved results" }));
+    expect(onViewSaved).toHaveBeenCalledOnce();
+  });
+
+  it("offers saved results for any live analysis failure", () => {
+    const onViewSaved = vi.fn();
+    render(
+      <AnalysisView
+        analysis={null}
+        error="The analysis timed out."
+        onViewSaved={onViewSaved}
+        progress={progress}
+        state="error"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("link", { name: "Browse saved results" }));
+    expect(onViewSaved).toHaveBeenCalledOnce();
   });
 
   it("explains an empty live response without inventing candidates", () => {

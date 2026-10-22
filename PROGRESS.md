@@ -1,6 +1,6 @@
 # Vyuha progress — deployment readiness
 
-Updated: October 21, 2026
+Updated: October 22, 2026
 
 ## Done
 
@@ -198,3 +198,29 @@ Updated: October 21, 2026
 ### Blocked / unverified
 
 - The exact Domino Qloo response body/result list is unavailable, so empty Insights entities cannot be distinguished conclusively from results filtered for missing/non-positive affinity; brand coverage is not established by HTTP 200 alone. No live Domino rerun was made.
+
+## Task 5 reliability — October 22, 2026
+
+### Done
+
+- Start the `/health` ping in the background on first load. If it is still pending after three seconds, Demos and Try-your-own show: “Waking up the AI engine, this can take up to 40 seconds.”
+- After 60 seconds, a live run shows a friendly long-running state and a Browse saved results action.
+- On live-run failure, immediately show an already-loaded saved result only for the same demo, with its capture date and “Saved result, not live” label. For custom briefs, offer the saved gallery rather than substituting another business's result. If a same-demo run is not cached, look it up in the background while the failure and saved-results action are already visible.
+- Demo cards now distinguish HTTP 404 (no configured saved file) from a backend/network/read error; failed checks no longer look like missing saved results.
+- Updated the deployment guide with the Render Secret Files setup and the current cold-start and long-run behavior.
+
+### Verified
+
+- Frontend `npm run lint`, `npm run typecheck`, plain `npm test` (6 files, 59 tests, default timeout), and `npm run build`: passed.
+- Backend `python -m pytest -q`: 67 passed; Ruff passed; mypy passed for 14 source files.
+- Local browser check with the backend pointed at `.vyuha-private/demo-runs`: all five saved demo cards appeared with dated labels. Opened a saved verdict and confirmed its not-live label and capture date. At 375px and 1440px there was no horizontal overflow.
+- Delayed the local `/health` response in the browser: the exact wake-up message appeared on both `/demos` and `/analyze` (Try your own business) after three seconds. The form remained blank.
+- `git diff --check`: passed. No commit or deployment was made.
+
+### Blocked / unverified
+
+- The live Render service's Environment settings and Secret Files were not inspected, so the hosted deployment's current saved-file contents cannot be confirmed. The local directory contains all five expected private files, and the local backend/frontend loaded them successfully.
+
+### Next
+
+- In Render, confirm `VYUHA_SAVED_RUNS_DIR=/etc/secrets`, add the five `<demo-id>.json` files listed in `docs/deploy.md` under **Environment > Secret Files**, and redeploy. Verify each `/saved-run/<demo-id>` endpoint returns HTTP 200 and the Vercel gallery shows dated saved-result actions.

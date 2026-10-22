@@ -58,22 +58,36 @@ The report contains counts and limitations only, not captured Qloo outputs.
 
 1. Copy the canonical Vercel production origin, such as `https://vyuha.vercel.app` (no path or trailing slash).
 2. In Render **Environment**, update `CORS_ORIGINS` to a comma-separated list containing both local origins and the exact Vercel origin, for example `http://localhost:3000,http://127.0.0.1:3000,https://vyuha.vercel.app`. Do not use `*`. Save and redeploy the Render service.
-3. In Render **Environment > Secret Files**, add one secret file per available demo. Use the exact
-   filenames `blue-bottle-san-francisco.json`, `the-ordinary-new-york.json`,
-   `starbucks-chennai.json`, `nike-portland.json`, and `qvxxqz-blorpblorp-boise.json`, and paste
-   the matching private output from `.vyuha-private/demo-runs/`. Render mounts these at
+3. In Render **Environment > Secret Files**, add one secret file for each available demo. The
+   expected, case-sensitive filenames are:
+   - `blue-bottle-san-francisco.json`
+   - `the-ordinary-new-york.json`
+   - `starbucks-chennai.json`
+   - `nike-portland.json`
+   - `qvxxqz-blorpblorp-boise.json`
+
+   For each file, paste the matching private JSON output from
+   `.vyuha-private/demo-runs/<filename>`. Render mounts these at
    `/etc/secrets/<filename>` for non-Docker services
    ([Render documentation](https://render.com/docs/configure-environment-variables#secret-files)).
-   `VYUHA_SAVED_RUNS_DIR=/etc/secrets` is set in the Blueprint. A card's **View saved result, not live** button
-   appears only when its corresponding file is available.
+   The backend must have `VYUHA_SAVED_RUNS_DIR=/etc/secrets`; this value is already in
+   `render.yaml`. Do not upload these files to GitHub or Vercel. Each gallery card shows
+   **View saved result, not live** only if its matching file is available to the backend.
 4. The legacy `GET /saved-run` endpoint can still read a single file at
    `VYUHA_SAVED_RUN_PATH=/etc/secrets/saved-run.json`; upload that optional file separately only
    when a legacy client needs it. Render secret files are read-only, so
    `VYUHA_SAVED_RUN_OUTPUT_PATH` is deliberately unset in the hosted Blueprint.
 5. Save changes and wait for Render to redeploy. The app reads files only on the backend; Vercel
-   never needs access to them. If the Vercel URL or secret files change, save the environment
-   update and redeploy Render. If changing `NEXT_PUBLIC_API_URL`, rebuild/redeploy Vercel so the
-   public build-time value is refreshed.
+   never needs access to them. To confirm each upload, open
+   `https://<render-service>.onrender.com/saved-run/<demo-id>` for each ID:
+   `blue-bottle-san-francisco`, `the-ordinary-new-york`, `starbucks-chennai`,
+   `nike-portland`, and `qvxxqz-blorpblorp-boise`. Each configured run should return HTTP 200
+   with its saved-run JSON; an HTTP 404 means the matching secret file is absent, invalidly named,
+   or the backend directory setting is wrong. Then reload the Vercel `/demos` page and confirm
+   each available card has **View saved result, not live** and a capture date after opening it.
+   If the Vercel URL or secret files change, save the environment update and redeploy Render. If
+   changing `NEXT_PUBLIC_API_URL`, rebuild/redeploy Vercel so the public build-time value is
+   refreshed.
 
 ## 5. Verify the hosted flow
 
@@ -128,7 +142,7 @@ The Render Blueprint declares the runtime variables and defaults. Secrets are ma
 - **Legacy `/saved-run` is unavailable:** upload the optional `saved-run.json` secret file and set
   `VYUHA_SAVED_RUN_PATH=/etc/secrets/saved-run.json`.
 - **Saved run returns an unavailable error:** verify the secret file is valid Vyuha saved-run JSON with `captured_at` and a schema-valid `analysis`. The API rejects malformed or oversized files rather than presenting broken data.
-- **Cold start appears slow:** Render's free service may sleep while idle. Wait for the request; Vyuha only labels the server as waking after five seconds without progress and can show the separately dated saved run if live analysis fails.
+- **Cold start appears slow:** Render's free service may sleep while idle. Vyuha pings `/health` in the background on first load; if that check is still pending after three seconds, the Demos and Try-your-own pages say the AI engine may take up to 40 seconds to wake. A live analysis taking over a minute offers a link to saved results. If a live run fails, Vyuha immediately uses an already-loaded saved result for that same demo, or lets the user browse available dated saved results; it never substitutes an unrelated business's saved run.
 - **Groq returns 429 during analysis:** the primary request immediately switches to the second configured Groq model. If that model also returns 429, Vyuha retries it once after a short delay and shows the busy message; when a saved run exists, Vyuha offers it as a clearly dated, non-live result.
 - **429 response during judging:** the message includes a UTC reset interval and points to the saved run if available. Adjust the two analysis limit variables in Render before the judging session; an instance restart resets the in-memory counters.
 - **LLM or Qloo service returns a rate limit/configuration error:** confirm the three secret values are set in Render and that the configured model/endpoints remain available. Vyuha reports integration failures and does not replace them with fabricated live evidence.

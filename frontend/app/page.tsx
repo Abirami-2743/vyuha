@@ -229,8 +229,8 @@ export default function Home() {
   const [form, setForm] = useState<BriefFields>(emptyBrief);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [savedRun, setSavedRun] = useState<SavedRun | null>(null);
   const [savedRuns, setSavedRuns] = useState<Partial<Record<DemoId, SavedRun>>>({});
+  const [savedRunErrors, setSavedRunErrors] = useState<Partial<Record<DemoId, boolean>>>({});
   const [savedRunsLoading, setSavedRunsLoading] = useState(true);
   const [activeSavedRun, setActiveSavedRun] = useState<SavedRun | null>(null);
   const [activeDemoId, setActiveDemoId] = useState<DemoId | null>(null);
@@ -238,6 +238,7 @@ export default function Home() {
   const [progress, setProgress] = useState<Map<string, ProgressEvent>>(new Map());
   const [trace, setTrace] = useState<TraceStep[]>([]);
   const [loading, setLoading] = useState(false);
+  const [analysisTakingLong, setAnalysisTakingLong] = useState(false);
   const [healthCheckWakingUp, setHealthCheckWakingUp] = useState(false);
   const [analysisWakingUp, setAnalysisWakingUp] = useState(false);
   const [currentRequest, setCurrentRequest] = useState<DiscoveryRequest | null>(null);
@@ -246,9 +247,11 @@ export default function Home() {
   const routeHistory = useRef<string[]>([]);
   const analysisInFlight = useRef(false);
   const analysisController = useRef<AbortController | null>(null);
+  const analysisRequestId = useRef(0);
   const cancelRequested = useRef(false);
 
   const navigate = useCallback((path: string, replace = false) => {
+    if (path !== "/analyze") analysisRequestId.current += 1;
     if (typeof window !== "undefined") {
       const currentPath = window.location.pathname;
       if (currentPath !== path) {
@@ -278,6 +281,7 @@ export default function Home() {
           ? [...routeHistory.current, nextRoute]
           : routeHistory.current.slice(0, previousIndex + 1);
       if (analysisController.current && nextRoute !== "/analyze") {
+        analysisRequestId.current += 1;
         cancelRequested.current = true;
         analysisController.current.abort();
         analysisController.current = null;
@@ -303,7 +307,7 @@ export default function Home() {
     setApiReady(null);
     setApiMessage("");
     setHealthCheckWakingUp(false);
-    const wakingTimeoutId = window.setTimeout(() => setHealthCheckWakingUp(true), 5_000);
+    const wakingTimeoutId = window.setTimeout(() => setHealthCheckWakingUp(true), 3_000);
     try {
       await checkApi();
       setApiReady(true);
@@ -323,47 +327,37 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (screen !== "landing") return;
     const checkTimerId = window.setTimeout(() => void checkBackend(), 0);
     return () => window.clearTimeout(checkTimerId);
-  }, [screen, checkBackend]);
+  }, [checkBackend]);
 
   useEffect(() => {
     let mounted = true;
     void Promise.all(
       demoDefinitions.map(async ({ id }) => {
         try {
-          return [id, await getSavedRun(id)] as const;
+          return [id, await getSavedRun(id), false] as const;
         } catch (error: unknown) {
           console.error("saved_demo_run_load_failed", {
             event: "saved_demo_run_load_failed",
             demo_id: id,
             exception_type: error instanceof Error ? error.name : "UnknownError",
           });
-          return [id, null] as const;
+          return [id, null, true] as const;
         }
       }),
     ).then((runs) => {
       if (!mounted) return;
       const available: Partial<Record<DemoId, SavedRun>> = {};
-      for (const [id, run] of runs) {
+      const errors: Partial<Record<DemoId, boolean>> = {};
+      for (const [id, run, failed] of runs) {
         if (run) available[id] = run;
+        if (failed) errors[id] = true;
       }
       setSavedRuns(available);
+      setSavedRunErrors(errors);
       setSavedRunsLoading(false);
     });
-    void getSavedRun()
-      .then((run) => {
-        if (mounted && run) setSavedRun(run);
-      })
-      .catch((error: unknown) => {
-        if (mounted) {
-          console.error("saved_run_load_failed", {
-            event: "saved_run_load_failed",
-            exception_type: error instanceof Error ? error.name : "UnknownError",
-          });
-        }
-      });
     return () => {
       mounted = false;
     };
@@ -371,6 +365,7 @@ export default function Home() {
 
   const submitAnalysis = useCallback(async (request: DiscoveryRequest, demoId?: DemoId) => {
     if (analysisInFlight.current) return;
+    const requestId = ++analysisRequestId.current;
     analysisInFlight.current = true;
     cancelRequested.current = false;
     navigate("/analyze");
@@ -385,10 +380,12 @@ export default function Home() {
     setProgress(new Map());
     setTrace([]);
     setAnalysisWakingUp(false);
+    setAnalysisTakingLong(false);
     const controller = new AbortController();
     analysisController.current = controller;
     const timeoutId = window.setTimeout(() => controller.abort(), 240_000);
     const wakingTimeoutId = window.setTimeout(() => setAnalysisWakingUp(true), 5_000);
+    const longRunTimeoutId = window.setTimeout(() => setAnalysisTakingLong(true), 60_000);
 
     try {
       let receivedResult = false;
@@ -429,43 +426,48 @@ export default function Home() {
             : error instanceof Error
               ? error.message
               : "The analysis request could not be completed.";
-      let fileRun: SavedRun | null = null;
-      let savedRunLoadFailed = false;
-      try {
-        fileRun = await getSavedRun(demoId);
-      } catch {
-        savedRunLoadFailed = true;
-      }
-      const fallback = fileRun ?? (demoId ? savedRuns[demoId] ?? null : savedRun);
+      const fallback = demoId ? savedRuns[demoId] ?? null : null;
       if (fallback) {
         setAnalysis(fallback.analysis);
         setActiveSavedRun(fallback);
-        if (demoId) {
-          setSavedRuns((current) => ({ ...current, [demoId]: fallback }));
-        } else {
-          setSavedRun(fallback);
-        }
         setAnalysisIsSaved(true);
         setAnalysisError(failureMessage);
         navigate("/result", true);
       } else {
-        setAnalysisError(
-          `${failureMessage} ${
-            savedRunLoadFailed
-              ? "The configured saved run could not be loaded."
-              : "No private saved run is available."
-          }`,
-        );
+        setAnalysisError(`${failureMessage} Browse saved results to see any available dated runs.`);
+        if (demoId) {
+          void getSavedRun(demoId)
+            .then((run) => {
+              if (!run || cancelRequested.current || requestId !== analysisRequestId.current) return;
+              setSavedRuns((current) => ({ ...current, [demoId]: run }));
+              setSavedRunErrors((current) => ({ ...current, [demoId]: false }));
+              setAnalysis(run.analysis);
+              setActiveSavedRun(run);
+              setAnalysisIsSaved(true);
+              setAnalysisError(failureMessage);
+              navigate("/result", true);
+            })
+            .catch((savedRunError: unknown) => {
+              console.error("saved_demo_run_fallback_failed", {
+                event: "saved_demo_run_fallback_failed",
+                demo_id: demoId,
+                exception_type:
+                  savedRunError instanceof Error ? savedRunError.name : "UnknownError",
+              });
+            });
+        }
       }
     } finally {
       window.clearTimeout(timeoutId);
       window.clearTimeout(wakingTimeoutId);
+      window.clearTimeout(longRunTimeoutId);
       setAnalysisWakingUp(false);
+      setAnalysisTakingLong(false);
       analysisInFlight.current = false;
       analysisController.current = null;
       setLoading(false);
     }
-  }, [navigate, savedRun, savedRuns]);
+  }, [navigate, savedRuns]);
 
   function updateField(field: keyof BriefFields, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -530,6 +532,7 @@ export default function Home() {
 
   function handleBack() {
     if (route === "/analyze" && analysisController.current) {
+      analysisRequestId.current += 1;
       cancelRequested.current = true;
       analysisController.current.abort();
       analysisController.current = null;
@@ -545,6 +548,17 @@ export default function Home() {
     }
   }
 
+  function browseSavedResults() {
+    analysisRequestId.current += 1;
+    cancelRequested.current = true;
+    analysisController.current?.abort();
+    analysisController.current = null;
+    analysisInFlight.current = false;
+    setLoading(false);
+    setAnalysisTakingLong(false);
+    navigate("/demos");
+  }
+
   return (
     <main className="min-h-screen">
       <SiteHeader
@@ -558,6 +572,17 @@ export default function Home() {
         }}
         route={route}
       />
+
+      {healthCheckWakingUp &&
+        (route === "/demos" || (route === "/analyze" && screen === "brief")) && (
+          <p
+            aria-live="polite"
+            className="mx-auto max-w-7xl px-5 pt-4 text-sm font-medium text-slate-700 sm:px-8"
+            role="status"
+          >
+            Waking up the AI engine, this can take up to 40 seconds
+          </p>
+        )}
 
       {routeReady && route !== "/analyze" && (
         <>
@@ -583,6 +608,7 @@ export default function Home() {
             onViewSaved={viewSavedDemo}
             route={route}
             savedRuns={savedRuns}
+            savedRunErrors={savedRunErrors}
             savedRunsLoading={savedRunsLoading}
             trace={trace}
           />
@@ -724,7 +750,7 @@ export default function Home() {
             {apiReady === null ? (
               <span className="text-slate-600">
                 {healthCheckWakingUp
-                  ? "Waking up the server; free hosted instances can take up to a minute."
+                  ? "Waking up the AI engine, this can take up to 40 seconds"
                   : "Checking the live connection…"}
               </span>
             ) : apiReady ? (
@@ -732,8 +758,7 @@ export default function Home() {
             ) : (
               <>
                 <span className="text-rose-800">
-                  Backend may be waking up; free hosted instances can take up to a minute.{" "}
-                  {apiMessage}
+                  The backend did not respond. It may still be waking up. {apiMessage}
                 </span>
                 <button
                   className="rounded border border-line px-3 py-1.5 font-semibold hover:bg-white"
@@ -816,12 +841,13 @@ export default function Home() {
                   ? () => void submitAnalysis(currentRequest, activeDemoId ?? undefined)
                   : undefined
               }
-              onViewSaved={() => navigate("/demos")}
+              onViewSaved={browseSavedResults}
               progress={progress}
               trace={trace}
               state={viewState}
               isSavedRun={analysisIsSaved}
               wakingUp={analysisWakingUp}
+              takingLong={analysisTakingLong}
             />
           )}
         </section>

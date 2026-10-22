@@ -405,11 +405,13 @@ export function HomePage({ onNavigate }: { onNavigate: (path: string) => void })
 
 export function DemoGallery({
   savedRuns,
+  savedRunErrors = {},
   savedRunsLoading,
   onRun,
   onViewSaved,
 }: {
   savedRuns: Partial<Record<string, SavedRun>>;
+  savedRunErrors?: Partial<Record<Demo["id"], boolean>>;
   savedRunsLoading: boolean;
   onRun: (demo: Demo) => void;
   onViewSaved: (id: Demo["id"]) => void;
@@ -451,6 +453,10 @@ export function DemoGallery({
                 ) : savedRunsLoading ? (
                   <span className="flex min-h-11 items-center text-xs text-slate-600">
                     Checking for a saved result…
+                  </span>
+                ) : savedRunErrors[demo.id] ? (
+                  <span className="flex min-h-11 items-center text-xs text-rose-800" role="status">
+                    Could not check for a saved result. Check the connection and reload.
                   </span>
                 ) : (
                   <span className="flex min-h-11 items-center text-xs text-slate-600">
@@ -1039,6 +1045,7 @@ export function RoutedJudgePage({
   analysis,
   trace,
   savedRuns,
+  savedRunErrors,
   savedRunsLoading,
   onNavigate,
   onRun,
@@ -1048,6 +1055,7 @@ export function RoutedJudgePage({
   analysis: Analysis | null;
   trace: TraceStep[];
   savedRuns: Partial<Record<string, SavedRun>>;
+  savedRunErrors: Partial<Record<Demo["id"], boolean>>;
   savedRunsLoading: boolean;
   onNavigate: (path: string) => void;
   onRun: (demo: Demo) => void;
@@ -1055,7 +1063,15 @@ export function RoutedJudgePage({
 }) {
   if (route === "/") return <HomePage onNavigate={onNavigate} />;
   if (route === "/demos") {
-    return <DemoGallery savedRuns={savedRuns} savedRunsLoading={savedRunsLoading} onRun={onRun} onViewSaved={onViewSaved} />;
+    return (
+      <DemoGallery
+        onRun={onRun}
+        onViewSaved={onViewSaved}
+        savedRunErrors={savedRunErrors}
+        savedRuns={savedRuns}
+        savedRunsLoading={savedRunsLoading}
+      />
+    );
   }
   if (route === "/about") return <AboutPage />;
   if (route === "/result") return <VerdictPage analysis={analysis} onNavigate={onNavigate} />;

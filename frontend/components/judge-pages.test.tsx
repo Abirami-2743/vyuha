@@ -131,6 +131,23 @@ describe("judge-first pages", () => {
     expect(screen.getAllByText("No saved result is available")).toHaveLength(5);
   });
 
+  it("does not report missing saved runs when the backend check failed", () => {
+    render(
+      <DemoGallery
+        onRun={vi.fn()}
+        onViewSaved={vi.fn()}
+        savedRunErrors={{ "blue-bottle-san-francisco": true }}
+        savedRuns={{}}
+        savedRunsLoading={false}
+      />,
+    );
+
+    expect(
+      screen.getByText("Could not check for a saved result. Check the connection and reload."),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("No saved result is available")).toHaveLength(4);
+  });
+
   it("frames an unsupported result as an honest refusal to guess", () => {
     render(<VerdictPage analysis={emptyAnalysis} onNavigate={vi.fn()} />);
 
