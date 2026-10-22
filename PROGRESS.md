@@ -148,3 +148,53 @@ Updated: October 21, 2026
 ### Next
 
 - When authorized and the backend is running with configured credentials, verify the live analysis flow and saved-result links against actual service responses.
+
+## Verdict honesty and final validation — October 22, 2026
+
+### Done
+
+- Narrowed the partial-result logic so the warning appears only when a real check failed or was skipped; completed runs show a green completion line instead of a partial warning.
+- Updated the verdict copy to plain-language reasons, a collapsed technical-detail section, a confidence line based on run data, and a “What would change my mind” line tied to the actual critic findings.
+- Reworked abstention messaging to distinguish Qloo no results, unrecognized business, Qloo failure/rate limit, and all candidates rejected by the devil’s advocate without pretending there was a safe recommendation.
+- Fixed the JSX structure in the analysis results view so the top-three debates and evidence sections render correctly and the remaining debates remain hidden behind “See evidence.”
+
+### Verified
+
+- Frontend `npm run lint`, `npm run typecheck`, and `npm test -- --run --testTimeout 20000`: passed; Vitest reports 6 files and 50 tests passed.
+- Frontend `npm run build`: succeeded with a production Next.js build.
+- Backend `python -m pytest -q`: 67 passed in 49.21s.
+- Backend `python -m ruff check backend tests --config backend\pyproject.toml`: all checks passed.
+- Backend `python -m mypy --config-file backend\pyproject.toml backend\app`: success, 14 source files.
+- No commit or deployment was made.
+
+### Blocked / unverified
+
+- Direct browser verification at 375px and desktop against a live backend was not possible in this session because the local server and browser run were not available in the same environment. The relevant UI behavior is covered by automated tests, but live backend/browser confirmation remains pending on a running local app instance.
+
+### Next
+
+- Bring up the local backend/frontend together and complete a browser pass at 375px and desktop width against a live run and a saved-result view.
+
+## Task 3 evidence follow-up — October 22, 2026
+
+### Findings and changes
+
+- Domino's Pizza / Mumbai: the reported HTTP 200 responses rule out a Qloo transport failure. The code searches the submitted `brief.business_name`, then queries Insights using the resolved Qloo entity and selected map location; event requirements such as “Coffee service” are not sent to Qloo. A successful Insights response with no usable entities becomes an empty discovery result; candidates returned without positive numeric affinity are instead counted in an explicit exclusion limitation. The raw response body and a saved Domino run are not available, so the evidence cannot distinguish an empty `results.entities` list from candidates filtered for missing/non-positive affinity or prove whether Qloo covers the brand. “Timing not returned” concerns trace duration metadata, not whether the Qloo response succeeded or contained candidate evidence.
+- Found and fixed a real failure-to-empty presentation gap: missing Qloo configuration and Qloo authentication failures could fall through to “No candidates to compare” or a green completion line. The result UI now classifies both these cases as unavailable Qloo checks, and tests cover them.
+- The previous yellow box used `discovery.status === "partial"`; all five private saved demo runs had that status, so it appeared for 5/5 even when all individual checks completed. The verdict now derives the warning from failed or skipped checks: 3/5 saved runs show it (two with incomplete AI interpretation, one with partner discovery skipped); the other 2/5 show the green completion line.
+- The saved Qvxxqz Blorpblorp / Boise result triggers: “Partial result: Partner discovery was skipped because no matching business listing was verified.” The saved Blue Bottle Coffee / San Francisco run displays: “All checks completed: 5 partners checked, 3 rejected by the devil's advocate.”
+- Abstention copy now gives spelling and market steps when map identity was not verified. If no resolvable critic finding exists, the mind-changing line states that none was returned rather than fabricating evidence.
+
+### Verified
+
+- `npm test`: 6 files passed, 56 tests passed, using the default timeout.
+- `npm run lint`, `npm run typecheck`, and `npm run build`: passed.
+- `python -m pytest -q`: 67 passed; Ruff passed; mypy passed for 14 source files. No backend files changed in this follow-up.
+- Ran the local backend with `VYUHA_SAVED_RUNS_DIR` pointing at `.vyuha-private/demo-runs` and the production frontend together. The health endpoint, a saved-run endpoint, and the frontend returned HTTP 200.
+- Browser-checked saved recommended and abstention results at 375px and 1440px. Both were visibly marked “Saved result, not live”; no horizontal overflow was present. The recommended saved result showed the green completion line and collapsed Technical detail; the abstention refused to guess, gave spelling/market next steps, and hid Review possible partners.
+- Browser-checked Back on `/about`, `/demos`, `/analyze`, `/result`, `/result/evidence`, `/result/partners`, and a partner-detail route; Back was absent on `/` and present on each other route.
+- No commit or deployment was made.
+
+### Blocked / unverified
+
+- The exact Domino Qloo response body/result list is unavailable, so empty Insights entities cannot be distinguished conclusively from results filtered for missing/non-positive affinity; brand coverage is not established by HTTP 200 alone. No live Domino rerun was made.

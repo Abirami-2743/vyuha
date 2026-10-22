@@ -7,6 +7,7 @@ import type {
   Analysis,
   CandidateDecision,
   Criterion,
+  Criticism,
   Evidence,
   SavedRun,
   TraceStep,
@@ -35,9 +36,15 @@ function decisionsFor(analysis: Analysis): CandidateDecision[] {
 }
 
 function partnerReason(item: CandidateDecision): string {
+  const candidate = item.candidate.candidate;
+  if (candidate.evidence?.some((evidence) => evidence.source_type === "qloo")) {
+    return candidate.discovery_basis === "user_supplied_seeds"
+      ? `Qloo's taste data surfaced ${candidate.name} in a search based on your supplied seed brands.`
+      : `Qloo's taste data surfaced ${candidate.name} as a possible match in this search.`;
+  }
   const criteria = [
-    item.candidate.taste_affinity,
     item.candidate.evidence_relevance,
+    item.candidate.taste_affinity,
     item.candidate.complementarity,
     item.candidate.geographic_logistical_suitability,
     item.candidate.budget_compatibility,
@@ -50,6 +57,211 @@ function partnerReason(item: CandidateDecision): string {
       criterion.evidence.length > 0,
   );
   return supported?.rationale || "No positive reason with supporting evidence was returned.";
+}
+
+function qlooSignalCount(analysis: Analysis): number {
+  const candidates = [
+    ...analysis.discovery.candidate_checks.map((check) => check.candidate),
+    ...analysis.candidate_decisions.map((decision) => decision.candidate.candidate),
+  ];
+  const signals = new Set<string>();
+  for (const candidate of candidates) {
+    if (!candidate.evidence?.some((evidence) => evidence.source_type === "qloo")) continue;
+    const seedNames = candidate.seed_affinities?.map((item) => item.seed_name) ?? [];
+    if (seedNames.length) {
+      for (const seedName of seedNames) signals.add(`${candidate.entity_id}:${seedName}`);
+    } else {
+      signals.add(`${candidate.entity_id}:business`);
+    }
+  }
+  return signals.size;
+}
+
+function verifiedPlaceCount(analysis: Analysis): number {
+  const places = new Set<string>();
+  for (const check of analysis.discovery.candidate_checks) {
+    if (!check.verified_location) continue;
+    if (check.place_matches?.length) {
+      for (const place of check.place_matches) places.add(`${place.osm_type}:${place.osm_id}`);
+    } else {
+      places.add(check.candidate.entity_id);
+    }
+  }
+  return places.size;
+}
+
+function highestSeverity(criticisms: Criticism[]): Criticism | undefined {
+  const rank = { high: 0, medium: 1, low: 2 };
+  return [...criticisms].sort((left, right) => rank[left.severity] - rank[right.severity])[0];
+}
+
+function mainUncertainty(
+  analysis: Analysis,
+  selected: CandidateDecision | undefined,
+): string {
+  const criticism =
+    highestSeverity(selected?.criticisms ?? []) ??
+    highestSeverity(analysis.global_criticisms) ??
+    highestSeverity(analysis.candidate_decisions.flatMap((item) => item.criticisms));
+  if (criticism?.issue) return criticism.issue;
+  if (selected?.candidate.uncertainty.rationale) return selected.candidate.uncertainty.rationale;
+  return (
+    analysis.discovery.limitations.find((limitation) =>
+      /unknown|unverified|not establish|not prove/i.test(limitation),
+    ) ?? analysis.overall_decision.rationale
+  );
+}
+
+function whatWouldChangeMyMind(
+  analysis: Analysis,
+  selected: CandidateDecision | undefined,
+): string {
+  const criticism =
+    [...(selected?.criticisms ?? [])].find((item) => item.resolvable) ??
+    analysis.global_criticisms.find((item) => item.resolvable) ??
+    analysis.candidate_decisions
+      .flatMap((item) => item.criticisms)
+      .find((item) => item.resolvable);
+  return criticism?.effect_on_recommendation ??
+    "No resolvable critic finding stated what evidence would change this decision.";
+}
+
+function qlooFailure(analysis: Analysis): string | null {
+  const limitations = [...new Set([
+    ...analysis.discovery.business_identity.limitations,
+    ...analysis.discovery.limitations,
+  ])];
+  const failure = limitations.find((item) =>
+    /Qloo discovery failed|Qloo could not be reached|Qloo is temporarily rate limiting|Qloo did not respond before|Qloo (?:integration|discovery) is not configured|Qloo returned an unexpected response/i.test(
+      item,
+    ),
+  );
+  if (failure) return failure;
+  if (analysis.discovery.business_identity.qloo_status === "unavailable") {
+    return limitations.find((item) => /Qloo/i.test(item)) ??
+      "A Qloo request failed before the taste search completed.";
+  }
+  return null;
+}
+
+function abstentionReason(analysis: Analysis): string {
+  const failure = qlooFailure(analysis);
+  if (failure) {
+    if (/rate limit|rate limiting/i.test(failure)) {
+      return "A Qloo request was rate limited, so Vyuha could not complete the taste search.";
+    }
+    if (/timed out|timeout/i.test(failure)) {
+      return "A Qloo request timed out before the taste search could finish.";
+    }
+    return "A Qloo request failed, so its missing results were not treated as an empty search.";
+  }
+  if (analysis.discovery.business_identity.osm_status === "not_found") {
+    return "The map search did not verify the business in the requested market.";
+  }
+  if (
+    analysis.discovery.business_identity.qloo_status === "not_found" &&
+    analysis.discovery.candidate_checks.length === 0
+  ) {
+    return "Qloo did not recognize the business as an eligible brand for this search.";
+  }
+  const checked = analysis.candidate_decisions.length;
+  const rejectedByCritic = analysis.candidate_decisions.filter(
+    (item) => item.provisional_rating !== "SKIP" && item.final_rating === "SKIP",
+  ).length;
+  if (checked > 0 && rejectedByCritic === checked) {
+    return `${checked} ${checked === 1 ? "partner was" : "partners were"} checked, but the devil's advocate rejected them all.`;
+  }
+  if (
+    analysis.discovery.limitations.some((item) =>
+      /returned no place entities|no usable local place candidates/i.test(item),
+    ) ||
+    qlooSignalCount(analysis) === 0
+  ) {
+    return "Qloo returned no usable partner results for this search.";
+  }
+  if (checked > 0 && analysis.candidate_decisions.every((item) => item.final_rating === "SKIP")) {
+    return `${checked} ${checked === 1 ? "partner was" : "partners were"} checked, but none passed the evidence rules.`;
+  }
+  return analysis.overall_decision.rationale;
+}
+
+function partialCheckReasons(analysis: Analysis): string[] {
+  const reasons: string[] = [];
+  const checks = analysis.discovery.candidate_checks;
+  const unavailable = checks.filter((check) => check.status === "unavailable").length;
+  if (unavailable) {
+    reasons.push(
+      `Map checks for ${unavailable} of ${checks.length} candidate ${
+        checks.length === 1 ? "place" : "places"
+      } did not complete, so those candidates were not verified.`,
+    );
+  }
+
+  const limitations = [...new Set([
+    ...analysis.discovery.business_identity.limitations,
+    ...analysis.discovery.limitations,
+  ])];
+  const matchingQlooFailures = limitations.filter((item) =>
+    /Qloo discovery failed|Qloo could not be reached|Qloo is temporarily rate limiting|Qloo did not respond before|Qloo (?:integration|discovery) is not configured|Qloo returned an unexpected response/i.test(
+      item,
+    ),
+  ).length;
+  const qlooFailures = Math.max(
+    matchingQlooFailures,
+    analysis.discovery.business_identity.qloo_status === "unavailable" ? 1 : 0,
+  );
+  if (qlooFailures) {
+    reasons.push(
+      `Qloo could not complete ${qlooFailures} taste ${
+        qlooFailures === 1 ? "search" : "searches"
+      }; failed calls are not being treated as empty results.`,
+    );
+  }
+  if (
+    analysis.discovery.business_identity.osm_status === "unavailable" &&
+    unavailable === 0
+  ) {
+    reasons.push("The map service did not complete the business identity check.");
+  }
+  if (
+    analysis.discovery.business_identity.osm_status === "not_found" &&
+    checks.length === 0
+  ) {
+    reasons.push("Partner discovery was skipped because no matching business listing was verified.");
+  }
+  if (
+    analysis.discovery.business_identity.qloo_status === "not_found" &&
+    checks.length === 0
+  ) {
+    reasons.push("Qloo's local partner search was skipped because it did not recognize the business.");
+  }
+  if (limitations.some((item) => /AI interpretation unavailable/i.test(item))) {
+    reasons.push("The partner-fit interpretation did not complete; those assessments remain unknown.");
+  }
+  if (
+    limitations.some((item) => /Could not search OpenStreetMap for the conventional baseline/i.test(item))
+  ) {
+    reasons.push("The map search for a conventional comparison did not complete.");
+  }
+  const skippedQloo = limitations
+    .map((item) =>
+      item.match(
+        /Excluded (\d+) Qloo result\(s\) with (non-positive affinity|without a numeric affinity)/i,
+      ),
+    )
+    .filter((match): match is RegExpMatchArray => match !== null);
+  for (const skipped of skippedQloo) {
+    reasons.push(
+      `${skipped[1]} Qloo ${
+        skipped[1] === "1" ? "result was" : "results were"
+      } skipped because ${
+        skipped[2] === "non-positive affinity"
+          ? "the returned affinity was not positive"
+          : "no affinity value was returned"
+      }.`,
+    );
+  }
+  return [...new Set(reasons)];
 }
 
 function partnerRisk(item: CandidateDecision): string {
@@ -290,9 +502,31 @@ export function VerdictPage({
     (item) => item.provisional_rating !== "SKIP" && item.final_rating === "SKIP",
   ).length;
   const experiment = analysis.experiments.find((item) => item.candidate_name === name);
-  const bestReason = selected ? partnerReason(selected) : "No possible partner passed the minimum evidence checks.";
-  const mainRisk = selected ? partnerRisk(selected) : "The available evidence was not strong enough to recommend a partner.";
-  const firstTest = experiment?.next_step || experiment?.description || "No test plan was returned for this result; do not spend until a small, feasible test is agreed.";
+  const reason = selected && recommended ? partnerReason(selected) : abstentionReason(analysis);
+  const selectedRisk = selected
+    ? partnerRisk(selected)
+    : "The available evidence was not strong enough to recommend a partner.";
+  const firstTest = experiment?.next_step || experiment?.description;
+  const nextSteps = analysis.discovery.business_identity.qloo_status === "unavailable"
+    ? "Retry when Qloo is available. Check the business spelling or add 1–3 similar brands in seed brands."
+    : analysis.discovery.business_identity.qloo_status === "not_found"
+      ? "Check the business spelling. If Qloo does not recognize it, add 1–3 similar brands in seed brands."
+      : analysis.discovery.business_identity.osm_status === "not_found"
+        ? "Check the business spelling and city, or try a nearby larger city. If Qloo does not recognize the business, add 1–3 similar brands in seed brands."
+      : analysis.discovery.limitations.some((item) =>
+          /returned no place entities|no usable local place candidates/i.test(item),
+        ) || (analysis.discovery.business_identity.qloo_status === "resolved" && checked === 0)
+        ? "Try a nearby larger city, check the spelling, or add 1–3 similar brands in seed brands."
+        : "Review the devil's advocate findings and resolve the stated concerns with new evidence before spending.";
+  const fallbackTest = name
+    ? `Ask ${name} to confirm availability, permissions, and full costs; then agree on the smallest test that fits your stated budget.`
+    : nextSteps;
+  const partialReasons = partialCheckReasons(analysis);
+  const qlooSignals = qlooSignalCount(analysis);
+  const verifiedPlaces = verifiedPlaceCount(analysis);
+  const uncertainty = mainUncertainty(analysis, selected);
+  const whatWouldChange = whatWouldChangeMyMind(analysis, selected);
+  const tasteDetail = selected?.candidate.taste_affinity.rationale;
 
   return (
     <section className="mx-auto max-w-4xl px-5 py-8 sm:px-8 sm:py-12">
@@ -308,34 +542,77 @@ export function VerdictPage({
         </p>
         <ul className="mt-6 space-y-4">
           <li className="rounded-lg bg-paper p-4">
-            <h2 className="font-bold">✅ Best reason</h2>
-            <p className="mt-1 text-sm leading-6 text-slate-700">{bestReason}</p>
+            <h2 className="font-bold">
+              {recommended ? "Why this partner?" : <><span aria-hidden="true">🔎</span> Why Vyuha said no</>}
+            </h2>
+            <p className="mt-1 text-sm leading-6 text-slate-700">{reason}</p>
+            {recommended && tasteDetail && (
+              <details className="mt-3 border-t border-line pt-3">
+                <summary className="cursor-pointer text-sm font-semibold">
+                  Technical detail
+                </summary>
+                <p className="mt-2 text-sm leading-6 text-slate-700">{tasteDetail}</p>
+              </details>
+            )}
           </li>
-          <li className="rounded-lg bg-paper p-4">
-            <h2 className="font-bold">⚠️ Biggest risk</h2>
-            <p className="mt-1 text-sm leading-6 text-slate-700">{mainRisk}</p>
-          </li>
-          <li className="rounded-lg bg-paper p-4">
-            <h2 className="font-bold">🧪 The cheap test to run first</h2>
-            <p className="mt-1 text-sm leading-6 text-slate-700">{firstTest}</p>
-          </li>
+          {recommended ? (
+            <>
+              <li className="rounded-lg bg-paper p-4">
+                <h2 className="font-bold">⚠️ Biggest risk</h2>
+                <p className="mt-1 text-sm leading-6 text-slate-700">
+                  {selectedRisk}
+                </p>
+              </li>
+              <li className="rounded-lg bg-paper p-4">
+                <h2 className="font-bold">🧪 The cheap test to run first</h2>
+                <p className="mt-1 text-sm leading-6 text-slate-700">
+                  {firstTest || fallbackTest}
+                </p>
+              </li>
+            </>
+          ) : (
+            <li className="rounded-lg bg-paper p-4">
+              <h2 className="font-bold">What to try next</h2>
+              <p className="mt-1 text-sm leading-6 text-slate-700">{nextSteps}</p>
+            </li>
+          )}
         </ul>
         <p className="mt-5 text-sm text-slate-700">
-          Why trust this? {checked} {checked === 1 ? "partner checked" : "partners checked"} · {rejected} rejected by the devil&apos;s advocate.
+          {recommended ? "Why trust this?" : "Checks from this run:"} {checked}{" "}
+          {checked === 1 ? "partner checked" : "partners checked"} · {rejected} rejected by the
+          devil&apos;s advocate.
         </p>
         <p className="mt-2 text-xs leading-5 text-slate-600">
-          Qloo supplied taste clues for discovery. Taste affinity is not proof that the businesses share customers.
+          Based on {qlooSignals} Qloo {qlooSignals === 1 ? "signal" : "signals"} and{" "}
+          {verifiedPlaces} verified {verifiedPlaces === 1 ? "place" : "places"}. Main uncertainty:{" "}
+          {uncertainty}
         </p>
-        {analysis.discovery.status === "partial" && (
-          <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm leading-6 text-amber-950">
-            This is a partial result. Some checks could not be completed; review the evidence before acting.
+        <p className="mt-2 text-xs leading-5 text-slate-600">
+          What would change my mind: {whatWouldChange}
+        </p>
+        <p className="mt-2 text-xs leading-5 text-slate-600">
+          Taste affinity is not proof of shared customers.
+        </p>
+        {partialReasons.length ? (
+          <div className="mt-3 rounded-lg bg-amber-50 p-3 text-sm leading-6 text-amber-950">
+            <span className="font-semibold">Partial result:</span>
+            <ul className="mt-1 list-disc space-y-1 pl-5">
+              {partialReasons.map((item) => <li key={item}>{item}</li>)}
+            </ul>
+          </div>
+        ) : (
+          <p className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
+            All checks completed: {checked} {checked === 1 ? "partner checked" : "partners checked"},{" "}
+            {rejected} rejected by the devil&apos;s advocate.
           </p>
         )}
       </article>
       <div className="mt-5 flex flex-wrap gap-3">
-        <button className={actionButtonClass(true)} onClick={() => onNavigate("/result/partners")} type="button">
-          Review possible partners
-        </button>
+        {checked > 0 && (
+          <button className={actionButtonClass(true)} onClick={() => onNavigate("/result/partners")} type="button">
+            Review possible partners
+          </button>
+        )}
         <button className={actionButtonClass()} onClick={() => onNavigate("/result/evidence")} type="button">
           How did Vyuha decide?
         </button>

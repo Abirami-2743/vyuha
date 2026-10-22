@@ -263,6 +263,103 @@ describe("AnalysisView states", () => {
       .toBeInTheDocument();
   });
 
+  it("shows a failed Qloo request as a failure instead of an empty result", () => {
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        status: "partial",
+        business_identity: {
+          ...emptyAnalysis.discovery.business_identity,
+          status: "unavailable",
+          osm_status: "verified",
+          qloo_status: "unavailable",
+          limitations: ["Qloo is temporarily rate limiting requests. Please try again later."],
+        },
+        limitations: [
+          "Qloo discovery failed for seed 'Example': Qloo is temporarily rate limiting requests.",
+        ],
+      },
+    };
+    const onRetry = vi.fn();
+    render(
+      <AnalysisView
+        analysis={analysis}
+        error={null}
+        onRetry={onRetry}
+        progress={progress}
+        state="empty"
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Qloo could not complete the taste search" }))
+      .toBeInTheDocument();
+    expect(screen.getByText(/failed Qloo request, not an empty result/)).toBeInTheDocument();
+    screen.getByRole("button", { name: "Try again" }).click();
+    expect(onRetry).toHaveBeenCalledOnce();
+  });
+
+  it("shows an unconfigured Qloo integration as unavailable, not as no candidates", () => {
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        status: "partial",
+        business_identity: {
+          ...emptyAnalysis.discovery.business_identity,
+          status: "unavailable",
+          limitations: ["Qloo discovery is not configured on this server."],
+        },
+        limitations: ["Qloo discovery is not configured on this server."],
+      },
+    };
+    render(
+      <AnalysisView
+        analysis={analysis}
+        error={null}
+        progress={progress}
+        state="empty"
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Qloo could not complete the taste search" }))
+      .toBeInTheDocument();
+    expect(screen.getByText("Qloo discovery is not configured on this server."))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "No candidates to compare" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("shows a Qloo authentication failure as unavailable, not as no candidates", () => {
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        status: "partial",
+        business_identity: {
+          ...emptyAnalysis.discovery.business_identity,
+          status: "unavailable",
+          qloo_status: "unavailable",
+          limitations: ["Qloo authentication failed; verify the server-side API configuration."],
+        },
+        limitations: ["Qloo authentication failed; verify the server-side API configuration."],
+      },
+    };
+    render(
+      <AnalysisView
+        analysis={analysis}
+        error={null}
+        progress={progress}
+        state="empty"
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Qloo could not complete the taste search" }))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "No candidates to compare" }))
+      .not.toBeInTheDocument();
+  });
+
   it("does not describe a saved empty result as live", () => {
     render(
       <AnalysisView

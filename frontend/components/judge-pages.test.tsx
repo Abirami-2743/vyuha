@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DemoGallery,
@@ -136,7 +136,285 @@ describe("judge-first pages", () => {
 
     expect(screen.getByRole("heading", { name: "Vyuha says no safe partner found" })).toBeInTheDocument();
     expect(screen.getByText(/refuses to guess/)).toBeInTheDocument();
-    expect(screen.getByText(/0 partners checked/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Why Vyuha said no/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Why Vyuha said no" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Why Vyuha said no" }).querySelector("[aria-hidden='true']"))
+      .toHaveTextContent("🔎");
+    expect(screen.getAllByText(/0 partners checked/).length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "Review possible partners" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /top 3 partners/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/try a nearby larger city/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No test plan was returned/)).not.toBeInTheDocument();
+  });
+
+  it("suggests spelling and market checks when the business listing was not verified", () => {
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        status: "partial",
+        business_identity: {
+          ...emptyAnalysis.discovery.business_identity,
+          status: "not_found",
+          osm_status: "not_found",
+          qloo_status: "not_attempted",
+        },
+      },
+    };
+    render(<VerdictPage analysis={analysis} onNavigate={vi.fn()} />);
+
+    expect(screen.getByText(/Check the business spelling and city, or try a nearby larger city/))
+      .toBeInTheDocument();
+  });
+
+  it("shows a green completed-check line when map matches are unverified, not when a call failed", () => {
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        status: "partial",
+        candidate_checks: [
+          {
+            candidate: { entity_id: "unverified-1", name: "Unverified place", entity_type: "place" },
+            status: "unverified",
+            evidence: [],
+            missing_evidence: ["No matching map listing"],
+          },
+        ],
+      },
+      candidate_decisions: [unsupportedCandidate()],
+    };
+    render(<VerdictPage analysis={analysis} onNavigate={vi.fn()} />);
+
+    expect(screen.getByText(/All checks completed: 1 partner checked, 0 rejected/))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/Partial result:/)).not.toBeInTheDocument();
+  });
+
+  it("does not invent a mind-changing finding when the critic returned none", () => {
+    render(<VerdictPage analysis={emptyAnalysis} onNavigate={vi.fn()} />);
+
+    expect(
+      screen.getByText(
+        "What would change my mind: No resolvable critic finding stated what evidence would change this decision.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("names incomplete map checks and reports the affected count", () => {
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        status: "partial",
+        candidate_checks: [
+          {
+            candidate: { entity_id: "map-failed-1", name: "Map failure one", entity_type: "place" },
+            status: "unavailable",
+            verification_message: "The independent place lookup is unavailable.",
+            evidence: [],
+            missing_evidence: ["No independent place response was available"],
+          },
+          {
+            candidate: { entity_id: "map-failed-2", name: "Map failure two", entity_type: "place" },
+            status: "unavailable",
+            verification_message: "The independent place lookup is unavailable.",
+            evidence: [],
+            missing_evidence: ["No independent place response was available"],
+          },
+          {
+            candidate: { entity_id: "map-checked-1", name: "Map checked", entity_type: "place" },
+            status: "verified",
+            verified_location: true,
+            evidence: [],
+            missing_evidence: [],
+          },
+        ],
+      },
+    };
+    render(<VerdictPage analysis={analysis} onNavigate={vi.fn()} />);
+
+    expect(
+      screen.getByText(/Map checks for 2 of 3 candidate places did not complete/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/All checks completed/)).not.toBeInTheDocument();
+  });
+
+  it("uses plain-language taste evidence and keeps numeric affinity in collapsed technical detail", () => {
+    const candidate = unsupportedCandidate();
+    candidate.final_rating = "WORTH TESTING";
+    candidate.provisional_rating = "WORTH TESTING";
+    candidate.candidate.candidate.name = "Possible Place";
+    candidate.candidate.candidate.affinity_score = 0.881675;
+    candidate.candidate.candidate.evidence = [
+      { source_type: "qloo", source_reference: "/v2/insights", claim: "Qloo returned a candidate." },
+    ];
+    candidate.candidate.taste_affinity = {
+      assessment: "partial",
+      rationale: "Qloo returned numeric affinity 0.881675, a relative signal within this query only.",
+      evidence: [
+        { source_type: "qloo", source_reference: "/v2/insights", claim: "Qloo returned a candidate." },
+      ],
+    };
+    candidate.criticisms = [
+      {
+        code: "identity_unverified",
+        issue: "The map listing could not be linked to the Qloo result.",
+        evidence: [],
+        supporting_evidence_references: [],
+        severity: "high",
+        resolvable: true,
+        effect_on_recommendation: "A verified link between the Qloo result and the local listing could address this concern.",
+      },
+    ];
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        status: "complete",
+        candidate_checks: [
+          {
+            candidate: candidate.candidate.candidate,
+            status: "verified",
+            verified_location: true,
+            place_matches: [
+              {
+                osm_type: "node",
+                osm_id: 9,
+                name: "Possible Place",
+                display_name: "Possible Place",
+                category: "shop",
+                type: "retail",
+                lat: "0",
+                lon: "0",
+              },
+            ],
+            evidence: [],
+            missing_evidence: [],
+          },
+        ],
+      },
+      candidate_decisions: [candidate],
+      overall_decision: {
+        result: "WORTH TESTING",
+        selected_entity_id: "partner-1",
+        selected_candidate_name: "Possible Place",
+        rationale: "A cautious test is supported.",
+        evidence_references: [],
+      },
+    };
+    render(<VerdictPage analysis={analysis} onNavigate={vi.fn()} />);
+
+    expect(
+      screen.getByText("Qloo's taste data surfaced Possible Place as a possible match in this search."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Taste affinity is not proof of shared customers.")).toBeInTheDocument();
+    const technical = screen.getByText("Technical detail").closest("details");
+    expect(technical).not.toHaveAttribute("open");
+    expect(within(technical!).getByText(/numeric affinity 0\.881675/)).toBeInTheDocument();
+    expect(screen.getByText(/Based on 1 Qloo signal and 1 verified place/)).toBeInTheDocument();
+    expect(screen.getByText(/What would change my mind: A verified link/)).toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      label: "a Qloo search with no partner results",
+      qlooStatus: "resolved",
+      limitations: ["Qloo returned no place entities for seed 'Example'."],
+      expected: /Qloo returned no usable partner results/,
+    },
+    {
+      label: "a business Qloo did not recognize",
+      qlooStatus: "not_found",
+      limitations: ["Qloo returned 0 result(s), but none was an eligible brand entity."],
+      expected: /Qloo did not recognize the business/,
+    },
+    {
+      label: "a Qloo rate limit",
+      qlooStatus: "unavailable",
+      limitations: ["Qloo discovery failed for seed 'Example': Qloo is temporarily rate limiting requests."],
+      expected: /Qloo request was rate limited/,
+    },
+    {
+      label: "an unconfigured Qloo call",
+      qlooStatus: "unavailable",
+      limitations: ["Qloo discovery is not configured on this server."],
+      expected: /Qloo request failed/,
+    },
+    {
+      label: "a Qloo authentication failure",
+      qlooStatus: "unavailable",
+      limitations: ["Qloo authentication failed; verify the server-side API configuration."],
+      expected: /Qloo request failed/,
+    },
+  ])("explains abstention after $label", ({ label, qlooStatus, limitations, expected }) => {
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        status: "partial",
+        business_identity: {
+          ...emptyAnalysis.discovery.business_identity,
+          qloo_status: qlooStatus,
+          limitations,
+        },
+        limitations,
+      },
+    };
+    render(<VerdictPage analysis={analysis} onNavigate={vi.fn()} />);
+
+    expect(screen.getByText(expected)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Why Vyuha said no/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Review possible partners" })).not.toBeInTheDocument();
+    if (qlooStatus === "unavailable") {
+      expect(screen.getByText(/Partial result:/)).toBeInTheDocument();
+      expect(screen.queryByText(/All checks completed/)).not.toBeInTheDocument();
+    }
+    if (label === "a Qloo search with no partner results") {
+      expect(screen.getByText(/All checks completed: 0 partners checked, 0 rejected/))
+        .toBeInTheDocument();
+    }
+  });
+
+  it("explains when the devil's advocate rejected every checked partner", () => {
+    const rejected = unsupportedCandidate();
+    rejected.provisional_rating = "WORTH TESTING";
+    rejected.final_rating = "SKIP";
+    rejected.criticisms = [
+      {
+        code: "identity_unverified",
+        issue: "The business identity could not be confirmed.",
+        evidence: [],
+        supporting_evidence_references: [],
+        severity: "high",
+        resolvable: true,
+        effect_on_recommendation: "A verified local identity match could change this decision.",
+      },
+    ];
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        status: "complete",
+        candidate_checks: [
+          {
+            candidate: rejected.candidate.candidate,
+            status: "verified",
+            verified_location: true,
+            evidence: [],
+            missing_evidence: [],
+          },
+        ],
+      },
+      candidate_decisions: [rejected],
+    };
+    render(<VerdictPage analysis={analysis} onNavigate={vi.fn()} />);
+
+    expect(
+      screen.getByText(/1 partner was checked, but the devil's advocate rejected them all/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/A verified local identity match could change this decision/))
+      .toBeInTheDocument();
   });
 
   it("offers a usable demo link from a directly opened partner URL", () => {

@@ -682,20 +682,44 @@ export function AnalysisView({
 
   if (state === "empty" || !analysis || !analysis.candidate_decisions.length) {
     const identity = analysis?.discovery.business_identity;
+    const discoveryLimitations = [
+      ...(analysis?.discovery.limitations ?? []),
+      ...(identity?.limitations ?? []),
+    ];
+    const qlooFailure = discoveryLimitations.find((limitation) =>
+      /Qloo discovery failed|Qloo could not be reached|Qloo is temporarily rate limiting|Qloo did not respond before|Qloo (?:integration|discovery) is not configured|Qloo returned an unexpected response/i.test(
+        limitation,
+      ),
+    ) ??
+      (identity?.qloo_status === "unavailable"
+        ? identity.limitations.find((limitation) => /Qloo/i.test(limitation)) ??
+          "A Qloo request failed before the taste search completed."
+        : undefined);
     const noLocalMatch = identity?.osm_status === "not_found";
     const noQlooMatch = identity?.qloo_status === "not_found";
+    const noQlooCandidates = discoveryLimitations.some((limitation) =>
+      /returned no place entities|no usable local place candidates/i.test(limitation),
+    );
     const hasOtherMarketListings = (identity?.osm_options.length ?? 0) > 0;
-    const title = noLocalMatch
+    const title = qlooFailure
+      ? "Qloo could not complete the taste search"
+      : noLocalMatch
       ? hasOtherMarketListings
         ? "No matching listing was found in this market"
         : "This business could not be found"
+      : noQlooCandidates
+        ? "Qloo returned no partner results"
       : noQlooMatch
         ? "Qloo returned no matching business"
         : "No candidates to compare";
-    const nextStep = noLocalMatch
+    const nextStep = qlooFailure
+      ? "This was a failed Qloo request, not an empty result. Retry later, or add 1–3 similar brands in seed brands."
+      : noLocalMatch
       ? hasOtherMarketListings
         ? "Check the city or try a broader target market, then submit the brief again."
         : "Check the business name and market, or add a website or short description and try again."
+      : noQlooCandidates
+        ? "Try a nearby larger city, check the business spelling, or add 1–3 similar brands in seed brands."
       : noQlooMatch
         ? "Check the business name, or add seed brands your customers like and try again."
         : "Check the business name, market, and seed brands, then try again.";
@@ -703,15 +727,28 @@ export function AnalysisView({
       <section className="rounded-xl border border-line bg-white p-6">
         <h2 className="text-lg font-bold">{title}</h2>
         <p className="mt-2 text-sm leading-6 text-slate-700">
-          {noLocalMatch
+          {qlooFailure
+            ? qlooFailure
+            : noLocalMatch
             ? hasOtherMarketListings
               ? "The map lookup returned listings, but none was verified as an exact match in the requested market."
               : "The map lookup did not return an exact-name listing in the requested market."
+            : noQlooCandidates
+              ? "Qloo completed its request but returned no usable local partner entities."
             : noQlooMatch
               ? "Qloo Search did not return an eligible brand match for this business."
               : `The ${isSavedRun ? "saved" : "live"} analysis returned no candidate decisions. Vyuha won’t fill the gap with suggestions or estimates.`}
         </p>
         <p className="mt-2 text-sm leading-6 text-slate-700">{nextStep}</p>
+        {onRetry && (
+          <button
+            className="mt-4 rounded-lg bg-forest px-4 py-2 font-semibold text-white hover:bg-emerald-950"
+            onClick={onRetry}
+            type="button"
+          >
+            Try again
+          </button>
+        )}
         <details className="mt-5 border-t border-line pt-4">
           <summary className="cursor-pointer font-semibold">See evidence</summary>
           <div className="mt-4">
@@ -1081,8 +1118,8 @@ export function AnalysisView({
           </ul>
         </section>
       )}
-        </div>
-      </details>
     </div>
+  </details>
+</div>
   );
 }

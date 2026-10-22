@@ -133,6 +133,11 @@ export interface Discovery {
   candidate_checks: Array<{
     candidate: Candidate;
     status: string;
+    verification_message?: string | null;
+    location_relevance?: string;
+    place_matches?: Place[];
+    verified_identity?: boolean;
+    verified_location?: boolean;
     evidence: Evidence[];
     missing_evidence: string[];
   }>;

@@ -1293,6 +1293,23 @@ class DiscoveryPipeline:
                 "Some Qloo candidates could not be independently verified in the target market; "
                 "they are shown as checks, not recommended candidates."
             )
+        incomplete_issue_prefixes = (
+            "Qloo discovery failed",
+            "Could not independently verify",
+            "Could not search OpenStreetMap",
+            "The selected OSM business record has no coordinates",
+            "The selected OSM coordinates were invalid",
+            "AI interpretation unavailable",
+        )
+        has_incomplete_check = any(
+            issue.startswith(incomplete_issue_prefixes) for issue in issues
+        )
+        has_skipped_qloo_results = any(
+            issue.startswith("Excluded ")
+            and "Qloo result(s)" in issue
+            and ("affinity" in issue)
+            for issue in issues
+        )
         qloo_check_count = sum(
             any(item.source_type == "qloo" for item in check.candidate.evidence) for check in checks
         )
@@ -1303,11 +1320,9 @@ class DiscoveryPipeline:
             )
         result = DiscoveryResult(
             status=(
-                "complete"
-                if len(interpretations) == qloo_check_count
-                and len(verified) == len(checks)
-                and not issues
-                else "partial"
+                "partial"
+                if has_incomplete_check or has_skipped_qloo_results
+                else "complete"
             ),
             business_identity=identity,
             candidate_checks=checks,
@@ -1681,8 +1696,12 @@ class DiscoveryPipeline:
 
     @staticmethod
     def _early_result(identity: BusinessIdentity) -> DiscoveryResult:
-        status: Literal["partial", "needs_user_choice"] = (
-            "needs_user_choice" if identity.status == "needs_user_choice" else "partial"
+        status: Literal["partial", "needs_user_choice", "empty"] = (
+            "needs_user_choice"
+            if identity.status == "needs_user_choice"
+            else "empty"
+            if identity.status == "not_found"
+            else "partial"
         )
         return DiscoveryResult(
             status=status,
