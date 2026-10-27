@@ -24,6 +24,7 @@ type Screen = "landing" | "brief" | "analysis";
 type DemoId = (typeof demoDefinitions)[number]["id"];
 type ChoiceState = {
   osm: Place | null;
+  anyOsmLocation: boolean;
   qlooEntityId: string;
   seedIds: Record<string, string>;
 };
@@ -33,20 +34,19 @@ function placeLabel(place: Place): string {
   return `${place.name} — ${place.display_name}`;
 }
 
-function ChoicePanel({
-  analysis,
+export function ChoicePanel({
+  identity,
   request,
   onSubmit,
   onEdit,
   submitting,
 }: {
-  analysis: Analysis;
+  identity: Analysis["discovery"]["business_identity"];
   request: DiscoveryRequest;
   onSubmit: (nextRequest: DiscoveryRequest) => void;
   onEdit: () => void;
   submitting: boolean;
 }) {
-  const identity = analysis.discovery.business_identity;
   const requiresOsm =
     identity.osm_status === "ambiguous" || identity.osm_status === "selection_invalid";
   const requiresQloo =
@@ -56,11 +56,15 @@ function ChoicePanel({
   );
   const [choice, setChoice] = useState<ChoiceState>({
     osm: null,
+    anyOsmLocation: false,
     qlooEntityId: "",
     seedIds: {},
   });
   const missingRequiredChoice =
-    (requiresOsm && identity.osm_options.length > 0 && !choice.osm) ||
+    (requiresOsm &&
+      identity.osm_options.length > 0 &&
+      !choice.osm &&
+      !choice.anyOsmLocation) ||
     (requiresQloo && identity.qloo_options.length > 0 && !choice.qlooEntityId) ||
     pendingSeeds.some((resolution) => !choice.seedIds[resolution.query]);
   const hasOptions =
@@ -75,6 +79,7 @@ function ChoicePanel({
       nextRequest.selected_osm_type = choice.osm.osm_type;
       nextRequest.selected_osm_id = choice.osm.osm_id;
     }
+    if (choice.anyOsmLocation) nextRequest.selected_osm_any_location = true;
     if (choice.qlooEntityId) nextRequest.selected_qloo_entity_id = choice.qlooEntityId;
     nextRequest.seed_brands = request.seed_brands.map((seed) => {
       const selectedId = choice.seedIds[seed.name];
@@ -112,12 +117,35 @@ function ChoicePanel({
                 <input
                   checked={choice.osm?.osm_id === place.osm_id && choice.osm.osm_type === place.osm_type}
                   name="osm-option"
-                  onChange={() => setChoice((current) => ({ ...current, osm: place }))}
+                  onChange={() =>
+                    setChoice((current) => ({
+                      ...current,
+                      osm: place,
+                      anyOsmLocation: false,
+                    }))
+                  }
                   type="radio"
                 />
                 <span>{placeLabel(place)}</span>
               </label>
             ))}
+            {identity.osm_options.length > 1 && (
+              <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-line p-3 text-sm hover:bg-paper">
+                <input
+                  checked={choice.anyOsmLocation}
+                  name="osm-option"
+                  onChange={() =>
+                    setChoice((current) => ({
+                      ...current,
+                      osm: null,
+                      anyOsmLocation: true,
+                    }))
+                  }
+                  type="radio"
+                />
+                <span>Any location (use the brand)</span>
+              </label>
+            )}
           </div>
         </fieldset>
       )}
@@ -826,7 +854,7 @@ export default function Home() {
             analysis.discovery.business_identity.status === "needs_user_choice") &&
           currentRequest ? (
             <ChoicePanel
-              analysis={analysis}
+              identity={analysis.discovery.business_identity}
               onEdit={() => setScreen("brief")}
               onSubmit={(request) => void submitAnalysis(request, activeDemoId ?? undefined)}
               request={currentRequest}

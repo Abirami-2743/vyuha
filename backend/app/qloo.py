@@ -153,7 +153,7 @@ class QlooClient:
         entity: ResolvedEntity,
         output_type: str,
         *,
-        location: tuple[float, float],
+        location: tuple[float, float] | None,
         radius_miles: float = 100,
     ) -> list[Candidate]:
         started_at = time.perf_counter()
@@ -163,31 +163,39 @@ class QlooClient:
                 "The requested Qloo output type is invalid.",
                 status_code=422,
             )
-        latitude, longitude = location
-        if (
-            not math.isfinite(latitude)
-            or not math.isfinite(longitude)
-            or not -90 <= latitude <= 90
-            or not -180 <= longitude <= 180
-            or not math.isfinite(radius_miles)
-            or not 0 < radius_miles <= 100
-        ):
+        if not math.isfinite(radius_miles) or not 0 < radius_miles <= 100:
             raise QlooError(
                 "qloo_invalid_input",
-                "A valid location and radius are required for local place discovery.",
+                "A valid radius is required for local place discovery.",
                 status_code=422,
             )
-        wkt_point = f"POINT({longitude:.7f} {latitude:.7f})"
+        params: dict[str, str] = {
+            "filter.type": output_type,
+            "signal.interests.entities": entity.entity_id,
+            "take": "20",
+        }
+        if location is not None:
+            latitude, longitude = location
+            if (
+                not math.isfinite(latitude)
+                or not math.isfinite(longitude)
+                or not -90 <= latitude <= 90
+                or not -180 <= longitude <= 180
+            ):
+                raise QlooError(
+                    "qloo_invalid_input",
+                    "A valid location is required for local place discovery.",
+                    status_code=422,
+                )
+            wkt_point = f"POINT({longitude:.7f} {latitude:.7f})"
+            params["filter.location"] = wkt_point
+            params["filter.location.radius"] = str(radius_miles)
+        else:
+            wkt_point = None
         try:
             payload, status_code = await self._get_json(
                 "/v2/insights",
-                params={
-                    "filter.type": output_type,
-                    "signal.interests.entities": entity.entity_id,
-                    "filter.location": wkt_point,
-                    "filter.location.radius": str(radius_miles),
-                    "take": "20",
-                },
+                params=params,
             )
         except QlooError:
             record_external_call(
@@ -210,8 +218,9 @@ class QlooClient:
         reference = (
             f"/v2/insights?filter.type={output_type}"
             f"&signal.interests.entities={entity.entity_id}"
-            f"&filter.location={wkt_point}&filter.location.radius={radius_miles:g}"
         )
+        if wkt_point is not None:
+            reference += f"&filter.location={wkt_point}&filter.location.radius={radius_miles:g}"
         candidates: list[Candidate] = []
         for item in entities:
             if not isinstance(item, dict):

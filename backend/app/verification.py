@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import unicodedata
 from collections.abc import Awaitable, Callable
@@ -219,16 +220,26 @@ class NominatimClient:
 
     @staticmethod
     def exact_name_matches(name: str, places: list[OSMPlace]) -> list[OSMPlace]:
-        normalized = normalize_text(name)
+        normalized = normalize_brand_name(name)
         return [
-            place for place in places if place.name and normalize_text(place.name) == normalized
+            place
+            for place in places
+            if place.name and normalize_brand_name(place.name) == normalized
         ]
 
     @staticmethod
     def local_matches(market: str, places: list[OSMPlace]) -> list[OSMPlace]:
         requested = market.split(",", maxsplit=1)[0]
         normalized = normalize_text(requested)
-        locality_keys = ("city", "town", "village", "municipality", "borough")
+        locality_keys = (
+            "city",
+            "city_district",
+            "town",
+            "village",
+            "municipality",
+            "borough",
+            "district",
+        )
         return [
             place
             for place in places
@@ -248,8 +259,15 @@ class NominatimClient:
 
 def normalize_text(value: str) -> str:
     decomposed = unicodedata.normalize("NFKD", value.casefold())
+    decomposed = "".join(
+        character for character in decomposed if not unicodedata.combining(character)
+    ).replace("&", " and ")
+    without_apostrophes = decomposed.replace("'", "").replace("’", "").replace("‘", "")
+    without_quotes = without_apostrophes.replace('"', "").replace("“", "").replace("”", "")
     return " ".join(
-        "".join(character for character in decomposed if not unicodedata.combining(character))
-        .replace(",", " ")
-        .split()
+        re.sub(r"[^a-z0-9]+", " ", without_quotes, flags=re.IGNORECASE).split()
     )
+
+
+def normalize_brand_name(value: str) -> str:
+    return normalize_text(value.split("|", maxsplit=1)[0])

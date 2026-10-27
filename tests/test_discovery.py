@@ -2,18 +2,20 @@
 
 import asyncio
 import json
-from collections.abc import Coroutine, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from typing import Any, TypeVar
 
 import httpx
+import pytest
 from pydantic import SecretStr
 
 from backend.app.discovery_models import DiscoveryRequest
 from backend.app.llm import LLMClient
-from backend.app.pipeline import DiscoveryPipeline
+from backend.app.models import Candidate
+from backend.app.pipeline import DiscoveryPipeline, _is_same_brand_candidate
 from backend.app.qloo import QlooClient
 from backend.app.settings import Settings
-from backend.app.verification import NominatimClient
+from backend.app.verification import NominatimClient, normalize_brand_name
 from tests.fixtures.discovery_responses import (
     nominatim_payload,
     qloo_insights_payload,
@@ -111,10 +113,13 @@ async def run_pipeline(
     qloo_search_override: Mapping[str, object] | None = None,
     qloo_search_overrides: Mapping[str, Mapping[str, object]] | None = None,
     qloo_insights_override: Mapping[str, object] | None = None,
+    qloo_observer: Callable[[httpx.Request], None] | None = None,
 ) -> Any:
     settings = make_settings()
 
     def qloo_response(request: httpx.Request) -> httpx.Response:
+        if qloo_observer is not None:
+            qloo_observer(request)
         if request.url.host == "hackathon.api.qloo.com":
             if request.url.path == "/search":
                 per_query = (qloo_search_overrides or {}).get(
@@ -152,6 +157,51 @@ async def no_sleep(_: float) -> None:
     return None
 
 
+@pytest.mark.parametrize(
+    ("brand", "candidate_name"),
+    [
+        ("Domino's Pizza", "Domino’s Pizza | Deonar, Mumbai"),
+        ("Starbucks", "Starbucks | Bandra, Mumbai"),
+        ("Blue Bottle Coffee", "Blue Bottle Coffee | Ferry Building"),
+    ],
+)
+def test_same_brand_branches_are_excluded_by_normalized_name(
+    brand: str,
+    candidate_name: str,
+) -> None:
+    candidate = Candidate(
+        entity_id="different-branch-entity",
+        name=candidate_name,
+        entity_type="urn:entity:place",
+    )
+
+    assert _is_same_brand_candidate(candidate, {normalize_brand_name(brand)}, set())
+
+
+def test_same_brand_entity_id_is_excluded_even_when_name_differs() -> None:
+    candidate = Candidate(
+        entity_id="selected-brand-entity",
+        name="Another display name",
+        entity_type="urn:entity:place",
+    )
+
+    assert _is_same_brand_candidate(candidate, set(), {"selected-brand-entity"})
+
+
+def test_similarly_named_different_business_is_not_excluded() -> None:
+    candidate = Candidate(
+        entity_id="independent-coffee-shop",
+        name="Blue Bottle Cafe",
+        entity_type="urn:entity:place",
+    )
+
+    assert not _is_same_brand_candidate(
+        candidate,
+        {normalize_brand_name("Blue Bottle Coffee")},
+        {"blue-bottle-brand"},
+    )
+
+
 def test_ambiguous_business_identity_returns_options_without_discovery() -> None:
     qloo_requests: list[str] = []
 
@@ -185,6 +235,222 @@ def test_ambiguous_business_identity_returns_options_without_discovery() -> None
     assert result.business_identity.osm_status == "ambiguous"
     assert [place.osm_id for place in result.business_identity.osm_options] == [10, 11]
     assert qloo_requests == []
+
+
+def test_qloo_identity_runs_discovery_without_a_map_match() -> None:
+    insights_params: list[dict[str, str]] = []
+    search_payload = {
+        "results": [
+            {
+                "entity_id": "dominos-brand-id",
+                "name": "Domino’s Pizza",
+                "types": ["urn:entity:brand"],
+                "properties": {},
+            }
+        ]
+    }
+
+    def no_business_map_match(request: httpx.Request) -> httpx.Response:
+        query = request.url.params["q"].split(",", maxsplit=1)[0]
+        if query == "Domino's Pizza":
+            return httpx.Response(200, json=[])
+        return synthetic_response(request)
+
+    def observe_insights(request: httpx.Request) -> None:
+        if request.url.path == "/v2/insights":
+            insights_params.append(dict(request.url.params))
+
+    result = run(
+        run_pipeline(
+            {
+                "brief": {
+                    **brief(),
+                    "business_name": "Domino's Pizza",
+                    "city": "Mumbai",
+                }
+            },
+            nominatim_override=httpx.MockTransport(no_business_map_match),
+            qloo_search_override=search_payload,
+            qloo_observer=observe_insights,
+        )
+    )
+
+    assert result.business_identity.status == "partially_verified"
+    assert result.business_identity.osm_status == "not_found"
+    assert result.business_identity.qloo_status == "resolved"
+    assert result.business_identity.selected_qloo_entity.name == "Domino’s Pizza"
+    assert any(
+        "Qloo-only identity evidence" in item
+        for item in result.business_identity.limitations
+    )
+    assert insights_params
+    assert all("filter.location" not in params for params in insights_params)
+    assert result.location_query is None
+
+
+def test_qloo_identity_continues_when_map_lookup_fails() -> None:
+    search_payload = {
+        "results": [
+            {
+                "entity_id": "dominos-brand-id",
+                "name": "Domino's Pizza",
+                "types": ["urn:entity:brand"],
+                "properties": {},
+            }
+        ]
+    }
+
+    def map_failure(request: httpx.Request) -> httpx.Response:
+        query = request.url.params["q"].split(",", maxsplit=1)[0]
+        if query == "Domino's Pizza":
+            raise httpx.ConnectError("fixture map failure", request=request)
+        return synthetic_response(request)
+
+    result = run(
+        run_pipeline(
+            {
+                "brief": {
+                    **brief(),
+                    "business_name": "Domino's Pizza",
+                    "city": "Mumbai",
+                }
+            },
+            nominatim_override=httpx.MockTransport(map_failure),
+            qloo_search_override=search_payload,
+        )
+    )
+
+    assert result.business_identity.osm_status == "unavailable"
+    assert result.business_identity.qloo_status == "resolved"
+    assert result.candidate_checks
+    assert any("Map identity lookup failed" in item for item in result.limitations)
+
+
+def test_abstains_when_neither_map_nor_qloo_finds_business_even_with_seed_brands() -> None:
+    insights_calls: list[str] = []
+    empty_search = {"results": []}
+
+    def no_map_match(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[])
+
+    def observe_insights(request: httpx.Request) -> None:
+        if request.url.path == "/v2/insights":
+            insights_calls.append(request.url.params["signal.interests.entities"])
+
+    result = run(
+        run_pipeline(
+            {
+                "brief": brief(),
+                "seed_brands": [{"name": "Fixture Cafe"}],
+            },
+            nominatim_override=httpx.MockTransport(no_map_match),
+            qloo_search_override=empty_search,
+            qloo_observer=observe_insights,
+        )
+    )
+
+    assert result.status == "empty"
+    assert result.business_identity.osm_status == "not_found"
+    assert result.business_identity.qloo_status == "not_found"
+    assert not insights_calls
+
+
+def test_qloo_insights_excludes_a_branch_of_the_selected_brand() -> None:
+    search_payload = {
+        "results": [
+            {
+                "entity_id": "dominos-brand-id",
+                "name": "Domino’s Pizza",
+                "types": ["urn:entity:brand"],
+                "properties": {},
+            }
+        ]
+    }
+    insights_payload = {
+        "results": {
+            "entities": [
+                {
+                    "entity_id": "dominos-branch-id",
+                    "name": "Domino's Pizza | Deonar, Mumbai",
+                    "type": "urn:entity",
+                    "subtype": "urn:entity:place",
+                    "query": {"affinity": 0.9},
+                    "properties": {},
+                },
+                {
+                    "entity_id": "independent-place-id",
+                    "name": "Independent Cafe",
+                    "type": "urn:entity",
+                    "subtype": "urn:entity:place",
+                    "query": {"affinity": 0.5},
+                    "properties": {},
+                },
+            ]
+        }
+    }
+
+    def nominatim(request: httpx.Request) -> httpx.Response:
+        query = request.url.params["q"].split(",", maxsplit=1)[0]
+        if query == "Domino's Pizza":
+            payload = nominatim_payload(query, 10, "business")
+            payload[0]["address"] = {"city": "Mumbai", "country": "India"}
+            return httpx.Response(200, json=payload)
+        return httpx.Response(200, json=[])
+
+    result = run(
+        run_pipeline(
+            {
+                "brief": {
+                    **brief(),
+                    "business_name": "Domino's Pizza",
+                    "city": "Mumbai",
+                }
+            },
+            nominatim_override=httpx.MockTransport(nominatim),
+            qloo_search_override=search_payload,
+            qloo_insights_override=insights_payload,
+        )
+    )
+
+    assert result.business_identity.qloo_status == "resolved"
+    assert [check.candidate.name for check in result.candidate_checks] == [
+        "Independent Cafe"
+    ]
+
+
+def test_any_location_choice_uses_brand_without_picking_a_branch() -> None:
+    insights_params: list[dict[str, str]] = []
+
+    def multiple_branches(request: httpx.Request) -> httpx.Response:
+        query = request.url.params["q"].split(",", maxsplit=1)[0]
+        if query == "Fixture Skin":
+            return httpx.Response(
+                200,
+                json=nominatim_payload(query, 10, "business")
+                + nominatim_payload(query, 11, "business"),
+            )
+        return synthetic_response(request)
+
+    def observe_insights(request: httpx.Request) -> None:
+        if request.url.path == "/v2/insights":
+            insights_params.append(dict(request.url.params))
+
+    result = run(
+        run_pipeline(
+            {
+                "brief": brief(),
+                "selected_osm_any_location": True,
+            },
+            nominatim_override=httpx.MockTransport(multiple_branches),
+            qloo_observer=observe_insights,
+        )
+    )
+
+    assert result.business_identity.selected_osm_any_location
+    assert result.business_identity.selected_osm_place is None
+    assert result.business_identity.osm_status == "verified"
+    assert insights_params
+    assert all("filter.location" not in params for params in insights_params)
 
 
 def test_explicit_osm_choice_resolves_business_identity_and_continues() -> None:

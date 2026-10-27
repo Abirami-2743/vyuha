@@ -716,6 +716,7 @@ export function AnalysisView({
           "A Qloo request failed before the taste search completed."
         : undefined);
     const noLocalMatch = identity?.osm_status === "not_found";
+    const mapLookupUnavailable = identity?.osm_status === "unavailable";
     const noQlooMatch = identity?.qloo_status === "not_found";
     const noQlooCandidates = discoveryLimitations.some((limitation) =>
       /returned no place entities|no usable local place candidates/i.test(limitation),
@@ -723,6 +724,8 @@ export function AnalysisView({
     const hasOtherMarketListings = (identity?.osm_options.length ?? 0) > 0;
     const title = qlooFailure
       ? "Qloo could not complete the taste search"
+      : mapLookupUnavailable
+      ? "The map identity lookup did not complete"
       : noLocalMatch
       ? hasOtherMarketListings
         ? "No matching listing was found in this market"
@@ -734,6 +737,8 @@ export function AnalysisView({
         : "No candidates to compare";
     const nextStep = qlooFailure
       ? "This was a failed Qloo request, not an empty result. Retry later, or add 1–3 similar brands in seed brands."
+      : mapLookupUnavailable
+      ? "Retry when the map lookup is available. If Qloo recognized the business, its discovery is still not map-verified."
       : noLocalMatch
       ? hasOtherMarketListings
         ? "Check the city or try a broader target market, then submit the brief again."
@@ -749,6 +754,8 @@ export function AnalysisView({
         <p className="mt-2 text-sm leading-6 text-slate-700">
           {qlooFailure
             ? qlooFailure
+            : mapLookupUnavailable
+            ? "The map service failed before it could verify the business in this market. Qloo identity evidence is not a substitute for that map check."
             : noLocalMatch
             ? hasOtherMarketListings
               ? "The map lookup returned listings, but none was verified as an exact match in the requested market."

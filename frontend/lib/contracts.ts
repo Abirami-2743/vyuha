@@ -122,6 +122,7 @@ export interface BusinessIdentity {
   qloo_options: Candidate[];
   seed_resolutions: SeedResolution[];
   selected_osm_place: Place | null;
+  selected_osm_any_location?: boolean;
   selected_qloo_entity: Candidate | null;
   evidence: Evidence[];
   limitations: string[];
@@ -252,6 +253,7 @@ export interface DiscoveryRequest {
   };
   selected_osm_type?: Place["osm_type"];
   selected_osm_id?: number;
+  selected_osm_any_location?: boolean;
   selected_qloo_entity_id?: string;
   seed_brands: Array<{ name: string; selected_entity_id?: string }>;
 }

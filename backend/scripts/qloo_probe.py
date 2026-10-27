@@ -1,167 +1,102 @@
-"""Probe the documented hackathon entity-search and cross-category Insights APIs."""
+"""Private, read-only OSM/Qloo probe. Never called from the production pipeline."""
+
+from __future__ import annotations
 
 import argparse
-import os
-import sys
-from urllib.parse import urlparse
+import asyncio
 
-import httpx
-from dotenv import load_dotenv
+from backend.app.errors import QlooError, VerificationError
+from backend.app.qloo import QlooClient
+from backend.app.settings import Settings
+from backend.app.verification import NominatimClient, normalize_brand_name
 
-OFFICIAL_BASE_URL = "https://hackathon.api.qloo.com"
 SEARCH_TYPE = "urn:entity:brand"
 OUTPUT_TYPE = "urn:entity:place"
 
 
-def report(name: str, passed: bool, status: str, detail: str) -> None:
-    outcome = "PASS" if passed else "FAIL"
-    print(f"{outcome} {name} status={status} {detail}")
+async def probe(name: str, city: str, settings: Settings) -> tuple[str, str, str, str, bool]:
+    osm_status = "unavailable"
+    location = None
+    infrastructure_failed = False
+
+    async with NominatimClient() as verifier:
+        try:
+            places = await verifier.search(name, city)
+            exact = verifier.exact_name_matches(name, places)
+            local = verifier.local_matches(city, exact)
+            if len(local) == 1:
+                osm_status = "verified"
+                place = local[0]
+                if place.lat is not None and place.lon is not None:
+                    location = (float(place.lat), float(place.lon))
+            elif len(local) > 1:
+                osm_status = "ambiguous"
+            elif exact:
+                osm_status = "outside requested market"
+            else:
+                osm_status = "not found"
+        except (VerificationError, ValueError):
+            infrastructure_failed = True
+
+    entity_label = "none"
+    insights_count = "not run"
+    positive_count = "not run"
+    if settings.qloo_api_key is None or not settings.qloo_api_key.get_secret_value().strip():
+        infrastructure_failed = True
+    else:
+        try:
+            async with QlooClient(settings) as qloo:
+                entities = await qloo.search_entities(name, SEARCH_TYPE)
+                exact_entities = [
+                    entity
+                    for entity in entities
+                    if normalize_brand_name(entity.name) == normalize_brand_name(name)
+                    and (not entity.entity_types or SEARCH_TYPE in entity.entity_types)
+                ]
+                if exact_entities:
+                    entity = exact_entities[0]
+                    entity_type = (
+                        SEARCH_TYPE
+                        if SEARCH_TYPE in entity.entity_types
+                        else entity.entity_type
+                    )
+                    entity_label = f"{entity.name} ({entity_type})"
+                    candidates = await qloo.get_cross_category_candidates(
+                        entity,
+                        OUTPUT_TYPE,
+                        location=location,
+                    )
+                    insights_count = str(len(candidates))
+                    positive_count = str(
+                        sum(
+                            candidate.affinity_score is not None
+                            and candidate.affinity_score > 0
+                            for candidate in candidates
+                        )
+                    )
+        except QlooError:
+            infrastructure_failed = True
+
+    return osm_status, entity_label, insights_count, positive_count, infrastructure_failed
 
 
-def main() -> int:
+async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--query",
-        required=True,
-        help="A real brand name to resolve through Qloo Search (not an entity ID).",
-    )
+    parser.add_argument("--name", required=True, help="Business or brand name")
+    parser.add_argument("--city", required=True, help="City or target market")
     args = parser.parse_args()
-
-    load_dotenv()
-    api_key = os.getenv("QLOO_API_KEY", "").strip()
-    base_url = os.getenv("QLOO_BASE_URL", OFFICIAL_BASE_URL).rstrip("/")
-    parsed_url = urlparse(base_url)
-    if (
-        parsed_url.scheme != "https"
-        or parsed_url.hostname != "hackathon.api.qloo.com"
-        or parsed_url.path
-        or parsed_url.query
-        or parsed_url.fragment
-    ):
-        report(
-            "entity_search", False, "not_run", "QLOO_BASE_URL must be the documented hackathon host"
-        )
-        report("cross_category_insights", False, "not_run", "invalid QLOO_BASE_URL")
-        return 1
-    if not api_key:
-        report("entity_search", False, "not_run", "QLOO_API_KEY is missing")
-        report("cross_category_insights", False, "not_run", "QLOO_API_KEY is missing")
-        return 1
-
-    try:
-        timeout = float(os.getenv("QLOO_TIMEOUT_SECONDS", "30"))
-        if timeout <= 0:
-            raise ValueError("timeout must be positive")
-    except ValueError:
-        report("entity_search", False, "not_run", "QLOO_TIMEOUT_SECONDS must be a positive number")
-        report("cross_category_insights", False, "not_run", "invalid timeout configuration")
-        return 1
-
-    headers = {"X-Api-Key": api_key}
-    entity_id: str | None = None
-    search_url = f"{base_url}/search"
-    try:
-        response = httpx.get(
-            search_url,
-            headers=headers,
-            params={"query": args.query, "types": SEARCH_TYPE},
-            timeout=timeout,
-        )
-    except httpx.TimeoutException:
-        report("entity_search", False, "no_response", "request timed out")
-        report("cross_category_insights", False, "not_run", "entity search did not return an ID")
-        return 1
-    except httpx.RequestError as exc:
-        report("entity_search", False, "no_response", f"request error ({type(exc).__name__})")
-        report("cross_category_insights", False, "not_run", "entity search did not return an ID")
-        return 1
-
-    if response.status_code != 200:
-        report("entity_search", False, str(response.status_code), "Qloo did not return HTTP 200")
-        report("cross_category_insights", False, "not_run", "entity search did not return an ID")
-        return 1
-
-    try:
-        search_payload = response.json()
-    except ValueError:
-        report("entity_search", False, str(response.status_code), "response was not JSON")
-        report("cross_category_insights", False, "not_run", "entity search did not return an ID")
-        return 1
-
-    results = search_payload.get("results") if isinstance(search_payload, dict) else None
-    first_result = results[0] if isinstance(results, list) and results else None
-    if isinstance(first_result, dict):
-        result_id = first_result.get("entity_id")
-        if isinstance(result_id, str) and result_id.strip():
-            entity_id = result_id
-
-    if entity_id is None:
-        report("entity_search", False, str(response.status_code), "no entity_id in Search results")
-        report("cross_category_insights", False, "not_run", "entity search did not return an ID")
-        return 1
-
-    report("entity_search", True, str(response.status_code), "resolved one brand entity")
-
-    try:
-        insights_response = httpx.get(
-            f"{base_url}/v2/insights",
-            headers=headers,
-            params={
-                "filter.type": OUTPUT_TYPE,
-                "signal.interests.entities": entity_id,
-            },
-            timeout=timeout,
-        )
-    except httpx.TimeoutException:
-        report("cross_category_insights", False, "no_response", "request timed out")
-        return 1
-    except httpx.RequestError as exc:
-        report(
-            "cross_category_insights", False, "no_response", f"request error ({type(exc).__name__})"
-        )
-        return 1
-
-    if insights_response.status_code != 200:
-        report(
-            "cross_category_insights",
-            False,
-            str(insights_response.status_code),
-            "Qloo did not return HTTP 200",
-        )
-        return 1
-
-    try:
-        insights_payload = insights_response.json()
-    except ValueError:
-        report(
-            "cross_category_insights",
-            False,
-            str(insights_response.status_code),
-            "response was not JSON",
-        )
-        return 1
-
-    insight_results = (
-        insights_payload.get("results") if isinstance(insights_payload, dict) else None
+    settings = Settings()
+    result = await probe(args.name, args.city, settings)
+    print(
+        "Business | City | OSM match status | Qloo entity (type) | "
+        "Insights entities | Positive affinity"
     )
-    entities = insight_results.get("entities") if isinstance(insight_results, dict) else None
-    if not isinstance(entities, list) or not entities:
-        report(
-            "cross_category_insights",
-            False,
-            str(insights_response.status_code),
-            "no cross-category entities returned",
-        )
-        return 1
-
-    report(
-        "cross_category_insights",
-        True,
-        str(insights_response.status_code),
-        "returned place entities",
+    print(
+        f"{args.name} | {args.city} | {result[0]} | {result[1]} | "
+        f"{result[2]} | {result[3]}"
     )
-    return 0
+    return 1 if result[4] else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(asyncio.run(main()))

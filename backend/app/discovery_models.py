@@ -26,6 +26,7 @@ class DiscoveryRequest(StrictModel):
     brief: BusinessBrief
     selected_osm_type: Literal["node", "way", "relation"] | None = None
     selected_osm_id: int | None = Field(default=None, gt=0)
+    selected_osm_any_location: bool = False
     selected_qloo_entity_id: str | None = Field(default=None, min_length=1, max_length=256)
     seed_brands: list[SeedBrandInput] = Field(default_factory=list, max_length=3)
 
@@ -33,6 +34,8 @@ class DiscoveryRequest(StrictModel):
     def selected_osm_identity_is_complete(self) -> DiscoveryRequest:
         if (self.selected_osm_type is None) != (self.selected_osm_id is None):
             raise ValueError("selected_osm_type and selected_osm_id must be supplied together")
+        if self.selected_osm_any_location and self.selected_osm_id is not None:
+            raise ValueError("select a specific OSM record or any location, not both")
         normalized_names = [seed.name.casefold() for seed in self.seed_brands]
         if len(normalized_names) != len(set(normalized_names)):
             raise ValueError("seed_brands must contain distinct names")
@@ -53,6 +56,7 @@ class BusinessIdentity(StrictModel):
         "not_attempted",
     ] = "not_attempted"
     osm_options: list[OSMPlace] = Field(default_factory=list, max_length=5)
+    selected_osm_any_location: bool = False
     qloo_options: list[Candidate] = Field(default_factory=list, max_length=20)
     selected_osm_place: OSMPlace | None = None
     selected_qloo_entity: Candidate | None = None

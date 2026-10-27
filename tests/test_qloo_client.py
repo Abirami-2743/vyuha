@@ -120,6 +120,34 @@ def test_insights_request_and_affinity_parse_from_observed_response_shape() -> N
     run(exercise())
 
 
+def test_insights_can_run_without_a_map_location() -> None:
+    def inspect_request(request: httpx.Request) -> None:
+        assert request.url.path == "/v2/insights"
+        assert request.url.params["signal.interests.entities"] == "test-brand-id"
+        assert "filter.location" not in request.url.params
+        assert "filter.location.radius" not in request.url.params
+
+    async def exercise() -> None:
+        from backend.app.models import ResolvedEntity
+
+        async with QlooClient(
+            make_settings(),
+            transport=json_handler(INSIGHTS_RESPONSE, before_respond=inspect_request),
+        ) as client:
+            candidates = await client.get_cross_category_candidates(
+                ResolvedEntity(
+                    entity_id="test-brand-id",
+                    name="Fixture Brand",
+                    entity_type="urn:entity:brand",
+                ),
+                "urn:entity:place",
+                location=None,
+            )
+        assert len(candidates) == 1
+
+    run(exercise())
+
+
 def test_search_empty_results_and_documented_no_result_status_return_empty() -> None:
     async def exercise() -> None:
         async with QlooClient(

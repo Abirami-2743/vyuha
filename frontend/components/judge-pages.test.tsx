@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DemoGallery,
@@ -203,7 +203,7 @@ describe("judge-first pages", () => {
     };
     render(<VerdictPage analysis={analysis} onNavigate={vi.fn()} />);
 
-    expect(screen.getByText(/All checks completed: 1 partner checked, 0 rejected/))
+    expect(screen.getByText("All checks ran; no partner passed."))
       .toBeInTheDocument();
     expect(screen.queryByText(/Partial result:/)).not.toBeInTheDocument();
   });
@@ -213,9 +213,70 @@ describe("judge-first pages", () => {
 
     expect(
       screen.getByText(
-        "What would change my mind: No resolvable critic finding stated what evidence would change this decision.",
+        "What would change my mind: A Qloo Insights result with usable partner entities would change this empty-result decision.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("labels Qloo-only identity and names the missing map evidence", () => {
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        status: "partial",
+        business_identity: {
+          ...emptyAnalysis.discovery.business_identity,
+          status: "partially_verified",
+          osm_status: "not_found",
+          qloo_status: "resolved",
+        },
+      },
+    };
+    render(<VerdictPage analysis={analysis} onNavigate={vi.fn()} />);
+
+    expect(screen.getByText("Qloo only, not map-verified")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Qloo Search recognized the brand, but the map did not verify a matching listing in this market.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/A matching map listing in the requested market would independently verify/),
+    ).toBeInTheDocument();
+  });
+
+  it("labels an abstention with all candidates skipped as rejected and uses a neutral completion line", () => {
+    const rejected = unsupportedCandidate();
+    rejected.provisional_rating = "WORTH TESTING";
+    rejected.final_rating = "SKIP";
+    rejected.criticisms = [
+      {
+        code: "identity_unverified",
+        issue: "The business identity could not be confirmed.",
+        evidence: [],
+        supporting_evidence_references: [],
+        severity: "high",
+        resolvable: true,
+        effect_on_recommendation: "A verified identity would change the decision.",
+      },
+    ];
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: { ...emptyAnalysis.discovery, status: "complete" },
+      candidate_decisions: [rejected],
+    };
+    const navigate = vi.fn();
+    render(<VerdictPage analysis={analysis} onNavigate={navigate} />);
+
+    expect(screen.getByText("All checks ran; no partner passed.")).toBeInTheDocument();
+    expect(screen.queryByText(/All checks completed/)).not.toBeInTheDocument();
+    expect(screen.getByText(/What would change my mind: A verified identity/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Rejected candidates and why" }));
+    expect(navigate).toHaveBeenCalledWith("/result/partners");
+    cleanup();
+    render(<PartnersPage analysis={analysis} onNavigate={navigate} />);
+    expect(screen.getByRole("heading", { name: "Rejected candidates and why" }))
+      .toBeInTheDocument();
   });
 
   it("names incomplete map checks and reports the affected count", () => {
@@ -388,8 +449,7 @@ describe("judge-first pages", () => {
       expect(screen.queryByText(/All checks completed/)).not.toBeInTheDocument();
     }
     if (label === "a Qloo search with no partner results") {
-      expect(screen.getByText(/All checks completed: 0 partners checked, 0 rejected/))
-        .toBeInTheDocument();
+      expect(screen.getByText("All checks ran; no partner passed.")).toBeInTheDocument();
     }
   });
 

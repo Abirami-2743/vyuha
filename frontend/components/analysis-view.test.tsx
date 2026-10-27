@@ -335,6 +335,38 @@ describe("AnalysisView states", () => {
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
+  it("shows a failed map identity lookup instead of calling the business unrecognized", () => {
+    const analysis: Analysis = {
+      ...emptyAnalysis,
+      discovery: {
+        ...emptyAnalysis.discovery,
+        status: "partial",
+        business_identity: {
+          ...emptyAnalysis.discovery.business_identity,
+          status: "unavailable",
+          osm_status: "unavailable",
+          qloo_status: "not_found",
+          limitations: ["The independent place lookup is unavailable."],
+        },
+        limitations: ["The independent place lookup is unavailable."],
+      },
+    };
+    render(
+      <AnalysisView
+        analysis={analysis}
+        error={null}
+        progress={progress}
+        state="empty"
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "The map identity lookup did not complete" }))
+      .toBeInTheDocument();
+    expect(screen.getByText(/map service failed before it could verify/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Qloo returned no matching business" }))
+      .not.toBeInTheDocument();
+  });
+
   it("shows an unconfigured Qloo integration as unavailable, not as no candidates", () => {
     const analysis: Analysis = {
       ...emptyAnalysis,

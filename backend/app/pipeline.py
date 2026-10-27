@@ -33,7 +33,7 @@ from .trace_metadata import (
     start_external_call_collection,
     stop_external_call_collection,
 )
-from .verification import NominatimClient, OSMPlace, normalize_text
+from .verification import NominatimClient, OSMPlace, normalize_brand_name, normalize_text
 
 logger = logging.getLogger("vyuha.discovery")
 _MAX_CANDIDATES_TO_VERIFY = 5
@@ -93,6 +93,17 @@ def _matches_location_context_name(candidate_name: str, context_names: set[str])
         f" {context_name} " in padded_candidate
         for context_name in context_names
         if len(context_name) >= 5
+    )
+
+
+def _is_same_brand_candidate(
+    candidate: Candidate,
+    brand_names: set[str],
+    entity_ids: set[str],
+) -> bool:
+    return (
+        candidate.entity_id in entity_ids
+        or normalize_brand_name(candidate.name) in brand_names
     )
 
 
@@ -199,7 +210,7 @@ class DiscoveryPipeline:
                     next_stage: tuple[AnalysisStage, str] | None = {
                         "stage_a": (
                             "discovery_candidates",
-                            "Querying Qloo for location-filtered candidates.",
+                                "Querying Qloo for partner candidates.",
                         )
                         if "seed_entities" in state
                         else None,
@@ -326,32 +337,42 @@ class DiscoveryPipeline:
         if market is None:
             raise RuntimeError("Validated business brief has no target market.")
 
+        osm_error: VerificationError | None = None
         try:
             osm_results = await self._verifier.search(brief.business_name, market)
         except VerificationError as exc:
-            identity = BusinessIdentity(
-                status="unavailable",
-                osm_status="unavailable",
-                limitations=[exc.public_message],
-            )
-            return {"identity": identity, "result": self._early_result(identity)}
+            osm_results = []
+            osm_error = exc
 
         exact_osm = self._verifier.exact_name_matches(brief.business_name, osm_results)
         local_osm = self._verifier.local_matches(market, exact_osm)
-        if not local_osm:
-            identity = BusinessIdentity(
-                status="not_found",
-                osm_status="not_found",
-                osm_options=exact_osm or osm_results,
-                limitations=[
-                    "No exact-name OSM listing was verified in the requested market. "
-                    "A supplied website was not fetched and is not independent verification."
-                ],
-            )
+        identity_osm_status: Literal[
+            "verified", "ambiguous", "not_found", "selection_invalid", "unavailable"
+        ] = (
+            "unavailable" if osm_error else "verified" if local_osm else "not_found"
+        )
+        identity_osm_options = local_osm or exact_osm or osm_results
+
+        def early_result(identity: BusinessIdentity) -> dict[str, object]:
+            if osm_error is not None and osm_error.public_message not in identity.limitations:
+                identity = identity.model_copy(
+                    update={"limitations": [*identity.limitations, osm_error.public_message]}
+                )
             return {"identity": identity, "result": self._early_result(identity)}
 
         selected_osm: OSMPlace | None = None
-        if request.selected_osm_id is not None:
+        if request.selected_osm_any_location:
+            if len(local_osm) < 2:
+                identity = BusinessIdentity(
+                    status="needs_user_choice",
+                    osm_status="selection_invalid",
+                    osm_options=local_osm,
+                    limitations=[
+                        "Any-location selection requires multiple matching local listings."
+                    ],
+                )
+                return early_result(identity)
+        elif request.selected_osm_id is not None:
             selected_osm = next(
                 (
                     place
@@ -370,10 +391,10 @@ class DiscoveryPipeline:
                         "The selected OSM record was not among this lookup's exact local matches."
                     ],
                 )
-                return {"identity": identity, "result": self._early_result(identity)}
+                return early_result(identity)
         elif len(local_osm) == 1:
             selected_osm = local_osm[0]
-        else:
+        elif len(local_osm) > 1:
             identity = BusinessIdentity(
                 status="needs_user_choice",
                 osm_status="ambiguous",
@@ -383,33 +404,45 @@ class DiscoveryPipeline:
                     "select the intended business location before discovery."
                 ],
             )
-            return {"identity": identity, "result": self._early_result(identity)}
+            return early_result(identity)
 
-        osm_evidence = self._osm_evidence(selected_osm)
+        osm_evidence = (
+            [self._osm_evidence(selected_osm)]
+            if selected_osm is not None
+            else [self._osm_evidence(place) for place in local_osm]
+        )
         if self._qloo is None:
             identity = BusinessIdentity(
                 status="unavailable",
-                osm_status="verified",
-                osm_options=[selected_osm],
+                osm_status=identity_osm_status,
+                osm_options=identity_osm_options,
+                selected_osm_any_location=request.selected_osm_any_location,
                 selected_osm_place=selected_osm,
-                evidence=[osm_evidence],
-                limitations=["Qloo discovery is not configured on this server."],
+                evidence=osm_evidence,
+                limitations=[
+                    *([osm_error.public_message] if osm_error else []),
+                    "Qloo discovery is not configured on this server.",
+                ],
             )
-            return {"identity": identity, "result": self._early_result(identity)}
+            return early_result(identity)
 
         try:
             qloo_results = await self._qloo.search_entities(brief.business_name, _SEED_TYPE)
         except QlooError as exc:
             identity = BusinessIdentity(
                 status="unavailable",
-                osm_status="verified",
+                osm_status=identity_osm_status,
                 qloo_status="unavailable",
-                osm_options=[selected_osm],
+                osm_options=identity_osm_options,
+                selected_osm_any_location=request.selected_osm_any_location,
                 selected_osm_place=selected_osm,
-                evidence=[osm_evidence],
-                limitations=[exc.public_message],
+                evidence=osm_evidence,
+                limitations=[
+                    *([osm_error.public_message] if osm_error else []),
+                    exc.public_message,
+                ],
             )
-            return {"identity": identity, "result": self._early_result(identity)}
+            return early_result(identity)
 
         eligible_qloo = [
             entity
@@ -419,7 +452,7 @@ class DiscoveryPipeline:
         exact_qloo = [
             entity
             for entity in eligible_qloo
-            if normalize_text(entity.name) == normalize_text(brief.business_name)
+            if normalize_brand_name(entity.name) == normalize_brand_name(brief.business_name)
         ]
         selectable_qloo = exact_qloo or eligible_qloo
         selected_qloo = next(
@@ -433,145 +466,171 @@ class DiscoveryPipeline:
         if request.selected_qloo_entity_id is not None and selected_qloo is None:
             identity = BusinessIdentity(
                 status="needs_user_choice",
-                osm_status="verified",
+                osm_status=identity_osm_status,
                 qloo_status="selection_invalid",
-                osm_options=[selected_osm],
+                osm_options=identity_osm_options,
+                selected_osm_any_location=request.selected_osm_any_location,
                 qloo_options=[
                     self._as_candidate(item, not_exact=not bool(exact_qloo))
                     for item in selectable_qloo[:5]
                 ],
                 selected_osm_place=selected_osm,
-                evidence=[osm_evidence],
+                evidence=osm_evidence,
                 limitations=["The selected Qloo entity was not among this Search response."],
             )
-            return {"identity": identity, "result": self._early_result(identity)}
+            return early_result(identity)
 
         if selected_qloo is None and len(exact_qloo) == 1:
             selected_qloo = exact_qloo[0]
         elif selected_qloo is None and exact_qloo:
             identity = BusinessIdentity(
                 status="needs_user_choice",
-                osm_status="verified",
+                osm_status=identity_osm_status,
                 qloo_status="ambiguous",
-                osm_options=[selected_osm],
+                osm_options=identity_osm_options,
+                selected_osm_any_location=request.selected_osm_any_location,
                 qloo_options=[self._as_candidate(item) for item in exact_qloo[:5]],
                 selected_osm_place=selected_osm,
-                evidence=[osm_evidence],
+                evidence=osm_evidence,
                 limitations=[
                     "Qloo returned multiple exact-name brand entities; select one explicitly."
                 ],
             )
-            return {"identity": identity, "result": self._early_result(identity)}
+            return early_result(identity)
 
-        if selected_qloo is None and request.seed_brands:
+        if selected_qloo is None and request.seed_brands and local_osm:
             resolutions, resolved_seeds = await self._resolve_seed_brands(request.seed_brands)
             if any(item.status == "needs_user_choice" for item in resolutions):
                 identity = BusinessIdentity(
                     status="needs_user_choice",
-                    osm_status="verified",
+                    osm_status=identity_osm_status,
                     qloo_status="not_found",
-                    osm_options=[selected_osm],
+                    osm_options=identity_osm_options,
+                    selected_osm_any_location=request.selected_osm_any_location,
                     qloo_options=[
                         self._as_candidate(item, not_exact=True) for item in eligible_qloo[:5]
                     ],
                     selected_osm_place=selected_osm,
                     seed_resolutions=resolutions,
                     discovery_basis="user_supplied_seeds",
-                    evidence=[osm_evidence],
+                    evidence=osm_evidence,
                     limitations=[
                         "Qloo returned no exact-name brand entity for the business. Choose a "
                         "near-match explicitly or resolve each supplied seed before discovery."
                     ],
                 )
-                return {"identity": identity, "result": self._early_result(identity)}
+                return early_result(identity)
 
             if not resolved_seeds:
                 identity = BusinessIdentity(
                     status="not_found",
-                    osm_status="verified",
+                    osm_status=identity_osm_status,
                     qloo_status="not_found",
-                    osm_options=[selected_osm],
+                    osm_options=identity_osm_options,
+                    selected_osm_any_location=request.selected_osm_any_location,
                     qloo_options=[
                         self._as_candidate(item, not_exact=True) for item in eligible_qloo[:5]
                     ],
                     selected_osm_place=selected_osm,
                     seed_resolutions=resolutions,
                     discovery_basis="user_supplied_seeds",
-                    evidence=[osm_evidence],
+                    evidence=osm_evidence,
                     limitations=[
                         "Qloo did not resolve any supplied seed brand. No discovery was run."
                     ],
                 )
-                return {"identity": identity, "result": self._early_result(identity)}
+                return early_result(identity)
 
             seed_evidence = [
                 self._seed_search_evidence(seed, entity) for seed, entity in resolved_seeds
             ]
             identity = BusinessIdentity(
                 status="partially_verified",
-                osm_status="verified",
+                osm_status=identity_osm_status,
                 qloo_status="not_found",
-                osm_options=[selected_osm],
+                osm_options=identity_osm_options,
+                selected_osm_any_location=request.selected_osm_any_location,
                 qloo_options=[
                     self._as_candidate(item, not_exact=True) for item in eligible_qloo[:5]
                 ],
                 selected_osm_place=selected_osm,
                 seed_resolutions=resolutions,
                 discovery_basis="user_supplied_seeds",
-                evidence=[osm_evidence, *seed_evidence],
+                evidence=[*osm_evidence, *seed_evidence],
                 limitations=[
                     "Qloo did not resolve an exact brand entity for the user's business. "
                     "Discovery below is derived from user-supplied seeds, not the user's own "
                     "brand or proof that its customers like those seeds.",
                     "Qloo and OSM provide no shared identifier, so cross-source entity linkage "
                     "is unverified.",
+                    *(
+                        [
+                            "The business was not map-verified; seed-based discovery is not "
+                            "local identity verification."
+                        ]
+                        if not local_osm
+                        else []
+                    ),
                 ],
             )
+            if osm_error is not None:
+                identity = identity.model_copy(
+                    update={"limitations": [*identity.limitations, osm_error.public_message]}
+                )
             return {
                 "identity": identity,
                 "seed_entities": resolved_seeds,
                 "stage_issues": [
-                    f"{item.query} was not found in Qloo."
-                    for item in resolutions
-                    if item.status == "not_found"
+                    *(
+                        [f"Map identity lookup failed: {osm_error.public_message}"]
+                        if osm_error
+                        else []
+                    ),
+                    *[
+                        f"{item.query} was not found in Qloo."
+                        for item in resolutions
+                        if item.status == "not_found"
+                    ],
                 ],
             }
 
         if selected_qloo is None and not selectable_qloo:
             identity = BusinessIdentity(
                 status="not_found",
-                osm_status="verified",
+                osm_status=identity_osm_status,
                 qloo_status="not_found",
-                osm_options=[selected_osm],
+                osm_options=identity_osm_options,
+                selected_osm_any_location=request.selected_osm_any_location,
                 selected_osm_place=selected_osm,
-                evidence=[osm_evidence],
+                evidence=osm_evidence,
                 limitations=[
                     f"Qloo Search returned {len(qloo_results)} result(s), but none was an "
                     f"eligible {_SEED_TYPE!r} entity."
                 ],
             )
-            return {"identity": identity, "result": self._early_result(identity)}
+            return early_result(identity)
 
         if selected_qloo is None:
             identity = BusinessIdentity(
                 status="needs_user_choice",
-                osm_status="verified",
+                osm_status=identity_osm_status,
                 qloo_status="ambiguous",
-                osm_options=[selected_osm],
+                osm_options=identity_osm_options,
+                selected_osm_any_location=request.selected_osm_any_location,
                 qloo_options=[
                     self._as_candidate(item, not_exact=True) for item in eligible_qloo[:5]
                 ],
                 selected_osm_place=selected_osm,
-                evidence=[osm_evidence],
+                evidence=osm_evidence,
                 limitations=[
                     "Qloo returned no exact-name brand entity. These results are labeled "
                     "'not an exact match'; select one explicitly or provide seed brands. "
                     "Results whose returned types exclude the requested brand type are omitted."
                 ],
             )
-            return {"identity": identity, "result": self._early_result(identity)}
+            return early_result(identity)
 
-        qloo_name_is_exact = normalize_text(selected_qloo.name) == normalize_text(
+        qloo_name_is_exact = normalize_brand_name(selected_qloo.name) == normalize_brand_name(
             brief.business_name
         )
         selected_qloo_candidate = self._as_candidate(
@@ -590,15 +649,16 @@ class DiscoveryPipeline:
             ),
         )
         identity = BusinessIdentity(
-            status="verified" if qloo_name_is_exact else "partially_verified",
-            osm_status="verified",
+            status="verified" if qloo_name_is_exact and local_osm else "partially_verified",
+            osm_status=identity_osm_status,
             qloo_status="resolved",
-            osm_options=[selected_osm],
+            osm_options=identity_osm_options,
+            selected_osm_any_location=request.selected_osm_any_location,
             qloo_options=[selected_qloo_candidate],
             selected_osm_place=selected_osm,
             selected_qloo_entity=selected_qloo_candidate,
             discovery_basis="business_brand",
-            evidence=[osm_evidence, qloo_evidence],
+            evidence=[*osm_evidence, qloo_evidence],
             limitations=[
                 *(
                     [
@@ -609,6 +669,23 @@ class DiscoveryPipeline:
                     if selected_qloo_candidate.identity_match_label
                     else []
                 ),
+                *(
+                    [
+                        "Qloo Search matched the business, but no exact-name map listing was "
+                        "verified in the requested market. This is Qloo-only identity evidence."
+                    ]
+                    if not local_osm
+                    else []
+                ),
+                *([osm_error.public_message] if osm_error else []),
+                *(
+                    [
+                        "Any location was selected. Qloo Insights was not restricted to a "
+                        "specific branch; candidate locations are checked separately."
+                    ]
+                    if request.selected_osm_any_location
+                    else []
+                ),
                 "An OSM listing verifies only that OpenStreetMap currently returns a matching "
                 "record; it does not prove ownership or current operation. Qloo and OSM provide "
                 "no shared identifier, so cross-source entity linkage is unverified.",
@@ -617,6 +694,21 @@ class DiscoveryPipeline:
         return {
             "identity": identity,
             "seed_entities": [(brief.business_name, selected_qloo)],
+            **(
+                {
+                    "stage_issues": [
+                        *(
+                            [f"Map identity lookup failed: {osm_error.public_message}"]
+                            if osm_error
+                            else []
+                        ),
+                        "Qloo Insights is not city-filtered because no specific map-verified "
+                        "business location was selected."
+                    ]
+                }
+                if selected_osm is None or osm_error is not None
+                else {}
+            ),
         }
 
     async def _resolve_seed_brands(
@@ -641,7 +733,7 @@ class DiscoveryPipeline:
             exact = [
                 entity
                 for entity in eligible
-                if normalize_text(entity.name) == normalize_text(seed_input.name)
+                if normalize_brand_name(entity.name) == normalize_brand_name(seed_input.name)
             ]
             options = exact or eligible
             selected = next(
@@ -688,7 +780,8 @@ class DiscoveryPipeline:
             selected_candidate = self._seed_candidate(
                 selected,
                 seed_input.name,
-                not_exact=normalize_text(selected.name) != normalize_text(seed_input.name),
+                not_exact=normalize_brand_name(selected.name)
+                != normalize_brand_name(seed_input.name),
             )
             resolutions.append(
                 SeedResolution(
@@ -736,36 +829,34 @@ class DiscoveryPipeline:
         identity = state["identity"]
         seeds = state["seed_entities"]
         place = identity.selected_osm_place
-        if place is None or place.lat is None or place.lon is None:
-            return {
-                "qloo_candidates": [],
-                "stage_issues": [
-                    *state.get("stage_issues", []),
-                    "The selected OSM business record has no coordinates; local Qloo "
-                    "Insights could not be run.",
-                ],
-            }
-        try:
-            location = (float(place.lat), float(place.lon))
-        except ValueError:
-            return {
-                "qloo_candidates": [],
-                "stage_issues": [
-                    *state.get("stage_issues", []),
-                    "The selected OSM coordinates were invalid; local Qloo Insights "
-                    "could not be run.",
-                ],
-            }
-
         issues = list(state.get("stage_issues", []))
+        location: tuple[float, float] | None = None
+        if place is not None and place.lat is not None and place.lon is not None:
+            try:
+                location = (float(place.lat), float(place.lon))
+            except ValueError:
+                issues.append(
+                    "The selected OSM coordinates were invalid; Qloo Insights was not "
+                    "restricted to a specific branch."
+                )
+        elif place is not None:
+            issues.append(
+                "The selected OSM business record has no coordinates; Qloo Insights was not "
+                "restricted to a specific branch."
+            )
+        elif not identity.selected_osm_any_location and identity.status != "partially_verified":
+            return {
+                "qloo_candidates": [],
+                "stage_issues": issues,
+            }
         candidates_by_seed: list[list[Candidate]] = []
         skipped_low = 0
         skipped_unknown = 0
         seed_entity_ids = {entity.entity_id for _, entity in seeds}
         if identity.selected_qloo_entity:
             seed_entity_ids.add(identity.selected_qloo_entity.entity_id)
-        excluded_seed_names = {
-            normalize_text(name)
+        excluded_brand_names = {
+            normalize_brand_name(name)
             for name in [
                 state["request"].brief.business_name,
                 *(entity.name for _, entity in seeds),
@@ -774,21 +865,21 @@ class DiscoveryPipeline:
                     if identity.selected_qloo_entity
                     else []
                 ),
-                *(
-                    [identity.selected_osm_place.name]
-                    if identity.selected_osm_place and identity.selected_osm_place.name
-                    else []
-                ),
             ]
         }
+        excluded_seed_names = set(excluded_brand_names)
+        if identity.selected_osm_place and identity.selected_osm_place.name:
+            excluded_seed_names.add(normalize_brand_name(identity.selected_osm_place.name))
         location_context_names = (
             _osm_location_context_names(identity.selected_osm_place)
             if identity.selected_osm_place is not None
             else set()
         )
         excluded_seed_names.update(location_context_names)
-        excluded_seed_names.discard(normalize_text(state["request"].brief.city or ""))
-        excluded_seed_names.discard(normalize_text(state["request"].brief.target_market or ""))
+        excluded_seed_names.discard(normalize_brand_name(state["request"].brief.city or ""))
+        excluded_seed_names.discard(
+            normalize_brand_name(state["request"].brief.target_market or "")
+        )
         for seed_name, seed_entity in seeds:
             try:
                 returned = (
@@ -808,9 +899,9 @@ class DiscoveryPipeline:
 
             seed_candidates: list[Candidate] = []
             for candidate in returned:
-                candidate_name = normalize_text(candidate.name)
+                candidate_name = normalize_brand_name(candidate.name)
                 if (
-                    candidate.entity_id in seed_entity_ids
+                    _is_same_brand_candidate(candidate, excluded_brand_names, seed_entity_ids)
                     or candidate_name in excluded_seed_names
                     or _matches_location_context_name(candidate_name, location_context_names)
                 ):
@@ -902,8 +993,11 @@ class DiscoveryPipeline:
             issues.append(f"Excluded {skipped_unknown} Qloo result(s) without a numeric affinity.")
         return {
             "identity": identity,
-            "location_point": location,
-            "location_radius_miles": 100.0,
+            **(
+                {"location_point": location, "location_radius_miles": 100.0}
+                if location is not None
+                else {}
+            ),
             "qloo_candidates": candidates,
             "stage_issues": issues,
         }

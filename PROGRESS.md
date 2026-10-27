@@ -1,6 +1,6 @@
 # Vyuha progress — deployment readiness
 
-Updated: October 22, 2026
+Updated: October 23, 2026
 
 ## Done
 
@@ -224,3 +224,26 @@ Updated: October 22, 2026
 ### Next
 
 - In Render, confirm `VYUHA_SAVED_RUNS_DIR=/etc/secrets`, add the five `<demo-id>.json` files listed in `docs/deploy.md` under **Environment > Secret Files**, and redeploy. Verify each `/saved-run/<demo-id>` endpoint returns HTTP 200 and the Vercel gallery shows dated saved-result actions.
+
+## Task 7 identity matching — October 23, 2026
+
+### Done
+
+- Identity matching now normalizes curly/straight apostrophes and quotes, diacritics, case, ampersands, whitespace, and missing apostrophes. OSM and Qloo brand matching share this normalization.
+- Qloo candidate exclusion now checks the selected Qloo entity ID and normalized brand names with the location suffix after `|` removed. Independent, similarly named businesses remain eligible.
+- Nominatim search continues to submit `<business name>, <full market>`. Exact locality checks now also recognize OSM `city_district` and `district` address fields used by non-US places.
+- If Nominatim returns no exact local identity, or its lookup fails, a Qloo brand match still proceeds to Qloo Insights. Such a result is marked “Qloo only, not map-verified”; without a unique map location, Insights is not filtered to a specific branch and candidate places still undergo map checks.
+- Added an “Any location (use the brand)” picker option alongside individual locations. That choice queries Insights without arbitrarily selecting a branch.
+- Abstention UI now identifies rejected candidates, uses a neutral completed-check message, and makes “What would change my mind” reflect the actual missing evidence or critic finding.
+- Added `backend/scripts/qloo_probe.py`, a diagnostic-only script that prints identity and Insights counts, never credentials or raw responses.
+
+### Verified
+
+- Frontend `npm run lint`, `npm run typecheck`, plain `npm test` (7 files, 64 tests), and `npm run build`: passed.
+- Backend `python -m pytest -q`: 87 passed; Ruff passed; mypy passed for 15 source files, including the probe.
+- The live probe was run for all three requested business/city pairs; results are reported in the task response. OSM returned multiple local matches for two pairs and no local match for one. The probe did not choose an arbitrary branch; when no unique map location was available, Qloo Insights was queried without a location filter.
+- No commit or deployment was made.
+
+### Blocked / unverified
+
+- The live Qloo counts are observations from this probe run, not guarantees or city-specific audience claims. OSM matching remains based on exact normalized locality labels in returned address fields, not a geospatial city boundary.

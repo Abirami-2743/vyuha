@@ -122,8 +122,35 @@ function whatWouldChangeMyMind(
     analysis.candidate_decisions
       .flatMap((item) => item.criticisms)
       .find((item) => item.resolvable);
-  return criticism?.effect_on_recommendation ??
-    "No resolvable critic finding stated what evidence would change this decision.";
+  if (criticism?.effect_on_recommendation) return criticism.effect_on_recommendation;
+  const identity = analysis.discovery.business_identity;
+  if (identity.qloo_status === "unavailable") {
+    return "A completed Qloo request that returns usable results would allow Vyuha to reassess this decision.";
+  }
+  if (identity.osm_status === "unavailable" && identity.qloo_status === "resolved") {
+    return "A successful map lookup that verifies the business in the requested market would add independent identity evidence.";
+  }
+  if (identity.osm_status === "not_found" && identity.qloo_status === "resolved") {
+    return "A matching map listing in the requested market would independently verify the business location.";
+  }
+  if (identity.qloo_status === "not_found") {
+    return "A Qloo Search match for the business, or a resolved customer-liked seed brand, would allow discovery.";
+  }
+  if (
+    analysis.candidate_decisions.length > 0 &&
+    analysis.candidate_decisions.every((item) => item.final_rating === "SKIP")
+  ) {
+    const issue = analysis.candidate_decisions
+      .flatMap((item) => item.criticisms)
+      .find((item) => item.issue)?.issue;
+    return issue
+      ? `Evidence that addresses the critic's concern — ${issue}`
+      : "New independent evidence that resolves the reasons every candidate was skipped.";
+  }
+  if (identity.qloo_status === "resolved" && analysis.candidate_decisions.length === 0) {
+    return "A Qloo Insights result with usable partner entities would change this empty-result decision.";
+  }
+  return "New independent evidence addressing the stated uncertainty would change this decision.";
 }
 
 function qlooFailure(analysis: Analysis): string | null {
@@ -155,7 +182,13 @@ function abstentionReason(analysis: Analysis): string {
     }
     return "A Qloo request failed, so its missing results were not treated as an empty search.";
   }
+  if (analysis.discovery.business_identity.osm_status === "unavailable") {
+    return "The map lookup failed, so Qloo identity results could not be checked against a local business listing.";
+  }
   if (analysis.discovery.business_identity.osm_status === "not_found") {
+    if (analysis.discovery.business_identity.qloo_status === "resolved") {
+      return "Qloo Search recognized the brand, but the map did not verify a matching listing in this market.";
+    }
     return "The map search did not verify the business in the requested market.";
   }
   if (
@@ -507,6 +540,8 @@ export function VerdictPage({
   const rejected = analysis.candidate_decisions.filter(
     (item) => item.provisional_rating !== "SKIP" && item.final_rating === "SKIP",
   ).length;
+  const allRejected = checked > 0 &&
+    analysis.candidate_decisions.every((item) => item.final_rating === "SKIP");
   const experiment = analysis.experiments.find((item) => item.candidate_name === name);
   const reason = selected && recommended ? partnerReason(selected) : abstentionReason(analysis);
   const selectedRisk = selected
@@ -546,6 +581,12 @@ export function VerdictPage({
             ? "A suggestion to test with care, not a promise of commercial success."
             : "Vyuha refuses to guess when the evidence does not support a safe recommendation."}
         </p>
+        {analysis.discovery.business_identity.osm_status !== "verified" &&
+          analysis.discovery.business_identity.qloo_status === "resolved" && (
+            <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950">
+              Qloo only, not map-verified
+            </p>
+          )}
         <ul className="mt-6 space-y-4">
           <li className="rounded-lg bg-paper p-4">
             <h2 className="font-bold">
@@ -607,16 +648,25 @@ export function VerdictPage({
             </ul>
           </div>
         ) : (
-          <p className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm leading-6 text-emerald-950">
-            All checks completed: {checked} {checked === 1 ? "partner checked" : "partners checked"},{" "}
-            {rejected} rejected by the devil&apos;s advocate.
+          <p
+            className={`mt-3 rounded-lg p-3 text-sm leading-6 ${
+              recommended
+                ? "bg-emerald-50 text-emerald-950"
+                : "border border-line bg-slate-50 text-slate-800"
+            }`}
+          >
+            {recommended
+              ? `All checks completed: ${checked} ${
+                  checked === 1 ? "partner checked" : "partners checked"
+                }, ${rejected} rejected by the devil's advocate.`
+              : "All checks ran; no partner passed."}
           </p>
         )}
       </article>
       <div className="mt-5 flex flex-wrap gap-3">
         {checked > 0 && (
           <button className={actionButtonClass(true)} onClick={() => onNavigate("/result/partners")} type="button">
-            Review possible partners
+            {allRejected ? "Rejected candidates and why" : "Review possible partners"}
           </button>
         )}
         <button className={actionButtonClass()} onClick={() => onNavigate("/result/evidence")} type="button">
@@ -644,11 +694,15 @@ export function PartnersPage({
   const others = [...qlooDecisions.slice(3), ...decisions.filter(
     (item) => item.candidate.candidate.discovery_basis === "osm_category_baseline",
   )];
+  const allRejected = decisions.length > 0 &&
+    decisions.every((item) => item.final_rating === "SKIP");
 
   return (
     <section className="mx-auto max-w-5xl px-5 py-8 sm:px-8 sm:py-12">
       <p className="text-xs font-bold uppercase tracking-widest text-forest">Possible partners</p>
-      <h1 className="mt-2 text-3xl font-bold">The top {top.length} to review</h1>
+      <h1 className="mt-2 text-3xl font-bold">
+        {allRejected ? "Rejected candidates and why" : `The top ${top.length} to review`}
+      </h1>
       <p className="mt-2 text-sm leading-6 text-slate-700">
         A rating is a prompt for what to do next, not a promise of commercial success.
         <span className="mt-1 block">Good signal — still test · Worth testing · Skip</span>
